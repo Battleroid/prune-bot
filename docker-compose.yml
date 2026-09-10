@@ -1,0 +1,23 @@
+services:
+  prune-bot:
+    build: .
+    container_name: prune-bot
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      TZ: America/New_York
+    volumes:
+      # A named volume, not a bind mount: SQLite in WAL mode needs working POSIX
+      # locking and shared memory, which bind mounts do not always provide.
+      - prune-data:/data
+      - ./config.toml:/config/config.toml:ro
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    # Long enough for close() to flush buffered message counts to SQLite.
+    stop_grace_period: 30s
+
+volumes:
+  prune-data:

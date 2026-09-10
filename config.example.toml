@@ -1,0 +1,225 @@
+# prunebot configuration.
+#
+# Copy to config.toml and fill in the four ids marked REQUIRED. Secrets never go
+# in here -- the token lives in .env.
+#
+# This file ships in the safest possible state: dry_run is on and kicking is off.
+# Nothing is touched until you deliberately change both.
+
+[bot]
+# REQUIRED. Right-click your server -> Copy Server ID (Developer Mode must be on).
+guild_ids = [0]  # <- replace 0 with your server id
+timezone  = "America/New_York"          # used for the sweep schedule and displayed times
+
+
+# ---------------------------------------------------------------------------
+# SAFETY. Read this section twice before changing anything in it.
+# ---------------------------------------------------------------------------
+[safety]
+# The master switch. While true, the bot works out exactly what it would do,
+# writes it to the audit log and posts it to the audit channel -- and changes
+# nothing. Leave it on for a full activity window before turning it off.
+dry_run = true
+
+# Hard ceilings per sweep. Anything over the cap rolls over to the next run, so a
+# large backlog is worked through gradually rather than all at once.
+max_flags_per_sweep   = 25
+max_kicks_per_sweep   = 5
+max_unflags_per_sweep = 200             # unflagging is safe, so this is generous
+
+# The circuit breaker: if more than this share of evaluable members would be
+# flagged (or kicked), the whole sweep aborts and does nothing at all. This is
+# what saves you if the database is wiped or a threshold is mistyped and the
+# entire server suddenly looks inactive.
+abort_if_flag_ratio_over = 0.25
+abort_if_kick_ratio_over = 0.05
+# A ratio is meaningless over a handful of people (1 of 2 is 50%), so below this
+# many evaluable members only the absolute caps apply.
+breaker_min_evaluable = 20
+
+# Refuse to flag or kick until the history backfill has covered a full window.
+# Without this, the very first sweep after deployment flags the entire server.
+require_backfill_before_action = true
+
+# The member cache is still loading right after connect; sweeping then would see
+# a partial server.
+min_uptime_before_sweep_minutes = 10
+
+# Mutations are serialized behind this delay. Discord does not publish per-route
+# rate limits for kicks or role changes, so this is deliberately unhurried.
+action_delay_seconds = 1.5
+
+# false: a member whose DMs are closed is flagged and still kicked on schedule.
+# true:  an undelivered warning never starts the kick clock, so they are flagged
+#        but never kicked. Every failure is recorded either way.
+require_warning_before_kick = false
+
+
+[activity]
+window_days  = 30                       # the trailing window
+min_messages = 1                        # fewer than this in the window is inactive
+                                        # (1 means "posted nothing at all")
+count_threads     = true
+count_forum_posts = true
+count_voice       = false               # not implemented; needs a separate intent
+count_reactions   = false               # not implemented; needs a separate intent
+
+[activity.channels]
+# "exclude": everything the bot can read except the list below, so new channels
+#            count automatically. "include": only the listed channels count.
+#
+# These are channel IDs, not names -- right-click a channel -> Copy Channel ID.
+# Threads and forum posts inherit their parent channel, so listing the parent is
+# enough; you never have to chase individual threads.
+mode    = "exclude"
+include = []
+exclude = [
+  # 111111111111111111,  # bot-spam
+  # 222222222222222222,  # counting
+]
+
+
+[flagging]
+# REQUIRED. The role given to inactive members. Create it first, then make sure
+# the bot's own role sits ABOVE it in Server Settings -> Roles, or the bot cannot
+# assign it. This is the most common cause of silent failures.
+inactive_role_id = 0  # <- replace with the role id
+
+grace_days_after_join = 14              # brand-new members are never flagged
+warn_via_dm     = true
+warn_channel_id = 0                     # FALLBACK only: used if the DM fails. 0 = DM only
+
+# Public announcement posted every time someone is flagged. This is a separate
+# thing from warn_channel_id (a fallback) and from audit.channel_id (a moderator
+# log) -- this one is for the members. 0 = do not announce.
+# Wording lives in [messages] announce_body. Never posted during a dry run.
+announce_channel_id = 0
+announce_ping       = true              # false = mention the member without pinging
+
+
+[kicking]
+# Turn this on only once you have watched previews for a full window and set
+# audit.channel_id. The bot refuses to start with kicking on and no audit channel.
+enabled = false
+
+kick_after_days         = 90            # days flagged before removal
+reverify_grace_days     = 30            # immunity after /verify
+auto_clear_on_activity  = false         # posting alone does NOT clear the flag;
+                                        # only /verify, the button, or a moderator
+dm_before_kick          = true
+final_warning_lead_days = 3
+kick_reason_template = "Inactive: under {min_messages} message(s) in {window_days}d, warned {warned_days}d ago"
+
+
+# ---------------------------------------------------------------------------
+# What members actually read. Edit freely.
+#
+# Placeholders available in every template below:
+#   {guild}           server name
+#   {member}          the member's display name
+#   {mention}         <@id>, pings them
+#   {threshold}       "posted anything", or "posted at least N messages"
+#   {window_days}     {min_messages}     {days_left}     {kick_after_days}
+#   {deadline}        a live countdown, e.g. "in 3 months"
+#   {deadline_date}   an absolute date
+#
+# Templates are checked when the bot starts, so a typo stops it there rather
+# than blowing up mid-sweep while trying to DM somebody. To show a literal
+# brace, double it: {{ or }}. Bodies accept Discord markdown.
+# ---------------------------------------------------------------------------
+[messages]
+button_label = "I'm still here"
+
+warn_title = "You have been marked inactive"
+warn_body = """
+You have not {threshold} in **{guild}** in the last {window_days} days, so you have been given the inactive role.
+
+**How to keep your place**
+Press the button below, or run **/verify** in the server. That is all it takes, and you do not need to explain yourself.
+
+**If you do nothing**
+You will be removed from the server {deadline}. You would be welcome to rejoin later."""
+
+final_title = "Final notice before removal"
+final_body = """
+This is your last reminder. You have not {threshold} in **{guild}** recently, and you are due to be removed {deadline}.
+
+Press the button below, or run **/verify** in the server, to keep your place."""
+
+# Posted to flagging.announce_channel_id when someone is flagged.
+announce_body = "{mention} has been marked inactive after {window_days} days without posting. Run **/verify** here, or press the button in your DMs, to keep your place. Otherwise you will be removed {deadline}."
+
+kick_title = "You have been removed from {guild}"
+kick_body = """
+This was automatic, for inactivity. It is not a ban and it is not a judgement about you, and you are welcome to rejoin at any time."""
+
+
+[whitelist]
+# These are SEEDS, applied on first run only. The database is the source of truth
+# afterwards, because /prune whitelist add cannot write to this read-only file.
+# Use /prune whitelist add|remove|list to manage it once running.
+role_ids    = []                        # e.g. your moderator role
+user_ids    = []
+exempt_bots = true                      # other bots are never flagged or kicked
+
+# ---------------------------------------------------------------------------
+# Who may run the moderator commands (/prune status, preview, run, pardon,
+# whitelist, config, backfill...).
+#
+# /verify is NOT covered by this -- it is the escape hatch for the people being
+# pruned, and must work for everyone.
+#
+# The guild owner is always allowed, so a bad allowlist cannot lock you out.
+# ---------------------------------------------------------------------------
+[access]
+# Roles whose holders may moderate. Evaluated live: grant the role and they have
+# access, remove it and they do not.
+role_ids = [
+  # 111111111111111111,  # Moderators
+]
+# Individual members, for people who should not need a whole role.
+user_ids = []
+
+# true  -- anyone with Manage Server can also moderate; the lists above add to that
+# false -- ONLY the lists above may moderate, administrators included
+allow_manage_guild = true
+
+# Note: listing any role or user here also makes /prune visible to everyone in the
+# command picker, because Discord's own visibility hint can only key off built-in
+# permissions -- restricting it would hide the commands from the very moderators
+# you just granted. Access is still enforced by the bot; non-allowed members get a
+# private refusal. To tidy up who *sees* the commands, use
+# Server Settings -> Integrations -> (the bot) -> Commands.
+
+
+[rejoin]
+restore_flag_on_rejoin   = true         # closes the leave-and-rejoin dodge
+reset_activity_on_rejoin = false        # keep their history; they really did post
+rejoin_grace_days        = 7
+
+
+[audit]
+# REQUIRED before kicking can be enabled. Every action is posted here as well as
+# written to the database. A private moderator channel is the right home for it.
+channel_id = 0  # <- replace with the channel id
+post_every_action  = true
+post_sweep_summary = true
+verbose_skips      = false
+
+
+[sweep]
+enabled = true
+run_at  = ["04:00"]                     # local to [bot].timezone, DST-aware
+
+
+[backfill]
+enabled                  = true
+on_first_run_only        = true
+concurrency              = 3            # channels scanned in parallel; do not crank
+progress_report_every    = 10000
+max_messages_per_channel = 500000
+
+
+[storage]
+retention_days         = 120            # must be >= activity.window_days
+flush_interval_seconds = 30             # how often buffered counts hit the database

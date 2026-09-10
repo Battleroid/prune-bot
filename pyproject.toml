@@ -1,0 +1,40 @@
+[project]
+name = "prunebot"
+version = "0.1.0"
+description = "Discord inactivity prune bot: flag inactive members, kick after a grace period, never touch the whitelist."
+requires-python = ">=3.12"
+dependencies = [
+    "discord.py==2.7.1",
+    "aiosqlite==0.22.1",
+    "pydantic>=2,<3",
+    "tzdata",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "pytest-asyncio>=0.24", "ruff>=0.6"]
+
+[project.scripts]
+prunebot = "prunebot.__main__:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+prunebot = ["db/*.sql"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+filterwarnings = ["error::DeprecationWarning:prunebot.*"]
+
+[tool.ruff]
+line-length = 100
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "SIM"]
+ignore = ["E501"]
