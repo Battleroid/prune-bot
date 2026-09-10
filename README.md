@@ -4,16 +4,18 @@ A Discord bot that retires dead accounts on a two-stage clock:
 
 1. Members who post **fewer than `min_messages` in a rolling `window_days`** get an
    **inactive role** and a warning DM.
-2. If they are still flagged **`kick_after_days`** later without reverifying, they
-   are **kicked**.
+2. If they are still flagged **`kick_after_days`** later, they are **kicked**.
 3. A **whitelist** of members and roles is permanently exempt — never flagged,
    never kicked.
 
 Defaults: nothing posted in 30 days → flagged; 90 days later → kicked.
 
-Posting again does **not** clear the flag. Clearing it is a deliberate act: the
-member runs `/verify` or presses the button in their warning DM, or a moderator
-pardons them, whitelists them, or simply takes the role off by hand.
+The warning is information, not a negotiation: **the only way for a member to
+clear the flag themselves is to post.** Once they are back over the threshold,
+the next sweep takes the role off. There is no button to press and no command to
+run -- a one-click "I'm still here" used to buy a month of immunity without
+posting a word, which defeated the point. Moderators can still pardon,
+whitelist, or take the role off by hand.
 
 ---
 
@@ -72,7 +74,7 @@ deadline inside the window, `dry_run = false` with no role configured.
      assign roles.
    - **Default Install Settings → Guild Install**:
      - **Scopes**: `bot`, `applications.commands`
-       (`applications.commands` is what registers `/prune` and `/verify`; without
+       (`applications.commands` is what registers `/prune`; without
        it the bot joins but has no commands)
      - **Permissions**: the six in the table below
    - **Install Link**: *Discord Provided Link*, then open it to add the bot.
@@ -148,8 +150,8 @@ are right for *your* server, and they cost nothing.
    in, so the numbers get more trustworthy, not less.
 5. **Day 30.** Set `audit.channel_id`, then `/prune config set safety.dry_run false`.
    Flagging starts. Kicking is still off.
-6. **Day 30.** Watch the first real flags land. Check that warning DMs arrive and
-   that the button works.
+6. **Day 30.** Watch the first real flags land. Check that warning DMs arrive, and
+   that a flagged member who posts is unflagged at the next sweep.
 7. **Day 60+.** Only once you are happy: set `kicking.enabled = true` in
    `config.toml` and restart, with `max_kicks_per_sweep = 1` for the first week.
 
@@ -159,9 +161,9 @@ At any point, `/prune config set safety.dry_run true` stops everything immediate
 
 ## Commands
 
-`/verify` — no permission gate, for everyone. Clears the caller's own inactive role.
-
-Everything else lives under `/prune`, which requires **Manage Server**:
+Everything lives under `/prune`, which requires **Manage Server** unless you set
+up an [access allowlist](#who-can-run-the-moderator-commands). There is no
+member-facing command: the one thing a flagged member can do is post.
 
 | Command | Purpose |
 |---|---|
@@ -206,9 +208,6 @@ Roles are evaluated live, so granting the role grants access and removing it tak
 it away. The **guild owner is always allowed**, so a bad allowlist cannot lock you
 out of your own bot.
 
-`/verify` is deliberately *not* covered — it is the escape hatch for the people
-being pruned, and has to work for everyone.
-
 One wrinkle worth knowing: Discord's own command-visibility hint can only key off
 built-in permissions, so once you list a role here the bot stops restricting
 visibility — otherwise `/prune` would be hidden from exactly the moderators you
@@ -230,7 +229,7 @@ announce_channel_id = 111111111111111111
 announce_ping       = true    # false mentions them without pinging
 
 [messages]
-announce_body = "{mention} has been marked inactive. Run **/verify** to keep your place - otherwise you go {deadline}."
+announce_body = "{mention} has been marked inactive. Post in the server to keep your place - otherwise you go {deadline}."
 ```
 
 Three channels, three jobs, easy to confuse:
@@ -252,15 +251,14 @@ announcement also never undoes the flag: by that point the role is already on.
 ### Customising what members read
 
 Everything a member sees lives in `[messages]` in `config.toml` — no code edit
-needed. Titles, bodies and the button label:
+needed. Titles and bodies:
 
 ```toml
 [messages]
-button_label = "I'm still here"
 warn_title   = "You have been marked inactive"
 warn_body    = """
 You have not {threshold} in **{guild}** in the last {window_days} days.
-Press the button below to keep your place, or you'll be removed {deadline}.
+Post in the server to keep your place, or you'll be removed {deadline}.
 """
 ```
 

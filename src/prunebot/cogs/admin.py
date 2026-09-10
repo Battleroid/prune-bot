@@ -263,8 +263,8 @@ class ConfigGroup(app_commands.Group):
             value=(
                 f"enabled: **{config.kicking.enabled}**\n"
                 f"after **{config.kicking.kick_after_days}** days flagged\n"
-                f"reverify grace: {config.kicking.reverify_grace_days}d - "
-                f"auto-clear on activity: {config.kicking.auto_clear_on_activity}"
+                f"default pardon: {config.kicking.reverify_grace_days}d - "
+                f"posting clears the flag: {config.kicking.auto_clear_on_activity}"
             ),
             inline=False,
         )
@@ -533,7 +533,7 @@ class PruneGroup(app_commands.Group):
     @app_commands.command(name="pardon", description="Temporarily protect a member and unflag them.")
     @app_commands.describe(
         member="Who to pardon",
-        days="How long the pardon lasts (default: the reverify grace period)",
+        days="How long the pardon lasts (default: kicking.reverify_grace_days)",
         reason="Recorded in the audit log",
     )
     async def pardon(

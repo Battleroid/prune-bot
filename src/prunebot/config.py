@@ -152,8 +152,13 @@ class FlaggingSection(_Base):
 class KickingSection(_Base):
     enabled: bool = True
     kick_after_days: PositiveInt = 90
+    #: Default length of a /prune pardon, and of the pardon given when a
+    #: moderator takes the role off by hand. The name predates the removal of
+    #: self-service reverification; it is kept so existing configs still load.
     reverify_grace_days: PositiveInt = 30
-    auto_clear_on_activity: bool = False
+    #: Posting back over the threshold clears the flag at the next sweep. This
+    #: is the only way a member can clear it themselves.
+    auto_clear_on_activity: bool = True
     dm_before_kick: bool = True
     final_warning_lead_days: NonNegInt = 3
     kick_reason_template: str = (
@@ -189,19 +194,19 @@ MESSAGE_PLACEHOLDERS = frozenset(
 DEFAULT_WARN_BODY = """You have not {threshold} in **{guild}** in the last {window_days} days, so you have been given the inactive role.
 
 **How to keep your place**
-Press the button below, or run **/verify** in the server. That is all it takes, and you do not need to explain yourself.
+Post in the server. As soon as you have {threshold} in the last {window_days} days, the role comes off at the next check.
 
 **If you do nothing**
 You will be removed from the server {deadline}. You would be welcome to rejoin later."""
 
 DEFAULT_FINAL_BODY = """This is your last reminder. You have not {threshold} in **{guild}** recently, and you are due to be removed {deadline}.
 
-Press the button below, or run **/verify** in the server, to keep your place."""
+Post in the server before then to keep your place."""
 
 DEFAULT_ANNOUNCE_BODY = (
-    "{mention} has been marked inactive after {window_days} days without posting. "
-    "Run **/verify** here, or press the button in your DMs, to keep your place. "
-    "Otherwise you will be removed {deadline}."
+    "{mention} has been marked inactive for not having {threshold} in "
+    "{window_days} days. Post in the server to keep your place, otherwise you "
+    "will be removed {deadline}."
 )
 
 DEFAULT_KICK_BODY = """This was automatic, for inactivity. It is not a ban and it is not a judgement about you, and you are welcome to rejoin at any time."""
@@ -213,8 +218,6 @@ class MessagesSection(_Base):
     Templates are checked at startup, so a typo in a placeholder stops the bot
     rather than raising mid-sweep while trying to DM somebody.
     """
-
-    button_label: str = Field(default="I'm still here", max_length=80)
 
     warn_title: str = Field(default="You have been marked inactive", max_length=256)
     warn_body: str = Field(default=DEFAULT_WARN_BODY, max_length=4000)
@@ -232,8 +235,6 @@ class MessagesSection(_Base):
     def _templates_are_renderable(self) -> MessagesSection:
         problems: list[str] = []
         for name, template in self.model_dump().items():
-            if name == "button_label":
-                continue  # plain text, no substitution
             try:
                 used = {
                     field
@@ -259,9 +260,6 @@ class MessagesSection(_Base):
 
 class AccessSection(_Base):
     """Who may run the moderator commands (/prune ...).
-
-    /verify is deliberately not covered: it is the escape hatch for the people
-    being pruned and must work for everyone.
     """
 
     #: Roles whose holders may moderate. Evaluated live, so granting the role

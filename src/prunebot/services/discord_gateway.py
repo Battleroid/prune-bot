@@ -17,7 +17,6 @@ from ..config import Config
 from ..domain.models import MemberInfo
 from ..gateway import ActionResult, WarnKind, WarnResult
 from ..ui.embeds import message_context, pre_kick_embed, warning_embed
-from ..ui.verify_button import warning_view
 
 log = logging.getLogger(__name__)
 
@@ -131,19 +130,19 @@ class DiscordGateway:
         )
         messages = self.config.messages
 
+        # No button, deliberately: a warning is information only. The one way a
+        # member can clear the flag themselves is to post.
         if kind is WarnKind.PRE_KICK:
             embed = pre_kick_embed(messages=messages, context=context)
-            view = None
         else:
             embed = warning_embed(
                 messages=messages, context=context, final=kind is WarnKind.FINAL
             )
-            view = warning_view(self.guild.id, user_id, messages.button_label)
 
         detail = ""
         if self.config.flagging.warn_via_dm:
             try:
-                message = await member.send(embed=embed, view=view)
+                message = await member.send(embed=embed)
             except discord.HTTPException as exc:
                 detail = f"DM failed: {exc}"
                 log.info("DM to %s failed: %s", user_id, exc)
@@ -164,7 +163,7 @@ class DiscordGateway:
             if isinstance(channel, discord.abc.Messageable):
                 try:
                     message = await channel.send(
-                        content=member.mention, embed=embed, view=view
+                        content=member.mention, embed=embed
                     )
                 except discord.HTTPException as exc:
                     detail = f"{detail}; channel post failed: {exc}".strip("; ")

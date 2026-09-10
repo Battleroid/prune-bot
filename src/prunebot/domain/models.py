@@ -84,9 +84,8 @@ class GuildPolicy:
     min_messages: int = 1
     grace_days_after_join: int = 14
     kick_after_days: int = 90
-    reverify_grace_days: int = 30
     final_warning_lead_days: int = 3
-    auto_clear_on_activity: bool = False
+    auto_clear_on_activity: bool = True
     kicking_enabled: bool = True
     require_warning_before_kick: bool = False
     exempt_bots: bool = True
@@ -120,7 +119,6 @@ class MemberSnapshot:
     warned_at: datetime | None = None
     warn_delivery: str | None = None
     final_warned_at: datetime | None = None
-    verified_at: datetime | None = None
     pardoned_until: datetime | None = None
     display_name: str = ""
 

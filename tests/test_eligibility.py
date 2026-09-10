@@ -74,21 +74,6 @@ def test_expired_pardon_no_longer_protects(policy, now):
     assert evaluate(snap, policy, now).action is Action.KICK
 
 
-def test_recent_verification_protects_and_unflags(policy, now):
-    snap = flagged_snapshot(flagged_days_ago=200, verified_at=days_ago(5))
-    d = evaluate(snap, policy, now)
-    assert d.action is Action.UNFLAG
-    assert d.reason == el.R_RECENTLY_VERIFIED
-
-
-def test_verification_grace_expires_exactly_on_the_boundary(policy, now):
-    # reverify_grace_days = 30
-    inside = flagged_snapshot(flagged_days_ago=200, verified_at=days_ago(29.9))
-    outside = flagged_snapshot(flagged_days_ago=200, verified_at=days_ago(30.1))
-    assert evaluate(inside, policy, now).action is Action.UNFLAG
-    assert evaluate(outside, policy, now).action is Action.KICK
-
-
 def test_new_members_are_skipped_during_join_grace(policy, now):
     d = evaluate(make_snapshot(message_count=0, joined_at=days_ago(3)), policy, now)
     assert d.action is Action.SKIP
@@ -135,17 +120,26 @@ def test_min_messages_boundary_is_inclusive(now):
 # --------------------------------------------------------------- already flagged
 
 
-def test_posting_again_does_not_clear_the_flag_by_default(policy, now):
+def test_posting_again_clears_the_flag_by_default(policy, now):
+    """The only self-service way out: post back over the threshold."""
     snap = flagged_snapshot(flagged_days_ago=10, message_count=50)
     d = evaluate(snap, policy, now)
-    assert d.action is Action.NONE
-    assert d.reason == el.R_AWAITING_VERIFY
+    assert d.action is Action.UNFLAG
+    assert d.reason == el.R_ACTIVE
 
 
-def test_posting_again_clears_the_flag_when_auto_clear_is_on(now):
-    p = make_policy(auto_clear_on_activity=True)
+def test_posting_below_the_threshold_does_not_clear_it(now):
+    p = make_policy(min_messages=3)
+    snap = flagged_snapshot(flagged_days_ago=10, message_count=2)
+    assert evaluate(snap, p, now).action is not Action.UNFLAG
+
+
+def test_with_auto_clear_off_only_a_moderator_can_clear_it(now):
+    p = make_policy(auto_clear_on_activity=False)
     snap = flagged_snapshot(flagged_days_ago=10, message_count=50)
-    assert evaluate(snap, p, now).action is Action.UNFLAG
+    d = evaluate(snap, p, now)
+    assert d.action is Action.NONE
+    assert d.reason == el.R_AWAITING_MODERATOR
 
 
 def test_flagged_but_not_yet_due_is_a_no_op(policy, now):
@@ -227,7 +221,6 @@ def test_exemptions_reports_every_applicable_protection(policy, now):
         whitelisted_user=True,
         whitelisted_role=True,
         pardoned_until=NOW.replace(year=2027),
-        verified_at=days_ago(1),
         joined_at=days_ago(1),
         message_count=0,
     )
@@ -235,7 +228,6 @@ def test_exemptions_reports_every_applicable_protection(policy, now):
     assert el.R_WHITELIST_USER in found
     assert el.R_WHITELIST_ROLE in found
     assert el.R_PARDONED in found
-    assert el.R_RECENTLY_VERIFIED in found
     assert el.R_NEW_MEMBER in found
 
 

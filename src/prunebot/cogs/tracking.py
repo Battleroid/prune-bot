@@ -114,7 +114,7 @@ class Tracking(commands.Cog):
 
         Deliberately does not write state here. The bot's own role changes raise
         this event too, and racing our own writes against the gateway event would
-        mislabel a `/verify` as a moderator pardon. Reconciliation at the start of
+        mislabel the bot's own unflag as a moderator pardon. Reconciliation at the start of
         every sweep settles drift without any such race, and nothing acts on a
         member in between sweeps anyway.
         """

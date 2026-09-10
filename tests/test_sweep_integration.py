@@ -380,15 +380,14 @@ async def test_clear_flag_acts_immediately_without_waiting_for_a_sweep(env):
         store=store,
         config=make_config(),
         user_id=member.user_id,
-        reason="verified",
-        verified=True,
+        reason="whitelisted",
     )
 
     assert ok
     assert gw.calls_of("remove_role") == [member.user_id]
     row = await store.get_member(GUILD_ID, member.user_id)
     assert row.state is MemberState.ACTIVE
-    assert row.verified_at is not None
+    assert row.verified_at is None  # clearing a flag grants no grace of its own
 
 
 async def test_bots_and_the_owner_are_never_touched(env):

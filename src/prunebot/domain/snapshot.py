@@ -50,7 +50,6 @@ def build_snapshot(
         warned_at=from_epoch(row.warned_at) if row else None,
         warn_delivery=row.warn_delivery if row else None,
         final_warned_at=from_epoch(row.final_warned_at) if row else None,
-        verified_at=from_epoch(row.verified_at) if row else None,
         pardoned_until=from_epoch(row.pardoned_until) if row else None,
         display_name=info.display_name,
     )

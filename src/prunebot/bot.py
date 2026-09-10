@@ -10,11 +10,9 @@ from discord.ext import commands
 
 from .config import Config, Secrets, apply_overrides
 from .db.store import Store
-from .domain.models import MemberState
 from .services.activity import ActivityBuffer
 from .services.discord_gateway import DiscordGateway
-from .services.sweep import clear_flag
-from .ui.verify_button import VerifyButton
+from .ui.verify_button import RetiredVerifyButton
 
 log = logging.getLogger(__name__)
 
@@ -22,7 +20,6 @@ COGS = (
     "prunebot.cogs.tracking",
     "prunebot.cogs.sweeper",
     "prunebot.cogs.admin",
-    "prunebot.cogs.verify",
 )
 
 
@@ -66,9 +63,10 @@ class PruneBot(commands.Bot):
         start, end = await self.store.connect()
         log.info("database ready (schema %s -> %s) at %s", start, end, self.store.path)
 
-        # Class, not instance: the library instantiates it per interaction from the
-        # custom_id. This is what makes a months-old warning button still work.
-        self.add_dynamic_items(VerifyButton)
+        # Warnings no longer carry a button, but ones already sent still do.
+        # Registering the retired handler answers those with an explanation
+        # rather than Discord's generic "This interaction failed".
+        self.add_dynamic_items(RetiredVerifyButton)
 
         for cog in COGS:
             await self.load_extension(cog)
@@ -230,27 +228,3 @@ class PruneBot(commands.Bot):
 
     def is_managed(self, guild_id: int) -> bool:
         return guild_id in self.base_config.bot.guild_ids
-
-    async def verify_member(
-        self, *, guild_id: int, user_id: int, actor_id: int | None = None
-    ) -> bool:
-        """Clear a member's flag immediately. Used by /verify and the DM button."""
-        row = await self.store.get_member(guild_id, user_id)
-        if row is None or row.state is not MemberState.FLAGGED:
-            return False
-        gateway = await self.gateway_for(guild_id)
-        if gateway is None:
-            return False
-        config = await self.config_for(guild_id)
-        return await clear_flag(
-            gateway=gateway,
-            store=self.store,
-            config=config,
-            user_id=user_id,
-            reason="verified by the member" if actor_id is None else "verified by a moderator",
-            actor_id=actor_id,
-            verified=True,
-            # /verify must work even while the bot is otherwise in dry run: it only
-            # ever removes a role, which is the safe direction.
-            dry_run=False,
-        )

@@ -38,7 +38,7 @@ def test_minimal_valid_config_loads_with_documented_defaults(tmp_path):
     assert cfg.activity.window_days == 30
     assert cfg.activity.min_messages == 1  # "0 messages in 30 days"
     assert cfg.kicking.kick_after_days == 90
-    assert cfg.kicking.auto_clear_on_activity is False
+    assert cfg.kicking.auto_clear_on_activity is True  # posting is the only self-service clear
     assert cfg.activity.count_threads is True
     assert cfg.activity.count_voice is False
     assert cfg.bot.tzinfo.key == "America/New_York"
@@ -270,7 +270,10 @@ def test_channel_ids_are_accepted(tmp_path):
 def test_message_templates_default_to_the_shipped_copy(tmp_path):
     cfg = load_config(write(tmp_path, VALID))
     assert "{guild}" in cfg.messages.warn_body
-    assert cfg.messages.button_label == "I'm still here"
+    for body in (cfg.messages.warn_body, cfg.messages.final_body, cfg.messages.announce_body):
+        assert "/verify" not in body and "button" not in body  # both retired
+    # The announce channel may be excluded from activity, so "post here" could be a lie.
+    assert "post here" not in cfg.messages.announce_body.lower()
 
 
 def test_a_typo_in_a_placeholder_is_caught_at_startup(tmp_path):
@@ -303,16 +306,16 @@ def test_custom_wording_is_accepted(tmp_path):
         VALID
         + '\n[messages]\nwarn_title = "Oi {member}"\n'
         + 'warn_body = "No posts in {window_days}d. Gone {deadline}."\n'
-        + 'button_label = "still alive"\n'
     )
     cfg = load_config(write(tmp_path, body))
     assert cfg.messages.warn_title == "Oi {member}"
-    assert cfg.messages.button_label == "still alive"
 
 
-def test_button_label_is_kept_within_discords_limit(tmp_path):
-    body = VALID + f'\n[messages]\nbutton_label = "{"x" * 200}"\n'
-    with pytest.raises(ConfigError):
+def test_a_leftover_button_label_is_reported(tmp_path):
+    """The button was retired. A config still setting its label should say so at
+    startup rather than silently doing nothing."""
+    body = VALID + '\n[messages]\nbutton_label = "still here"\n'
+    with pytest.raises(ConfigError, match="button_label"):
         load_config(write(tmp_path, body))
 
 

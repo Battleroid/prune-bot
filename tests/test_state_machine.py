@@ -12,7 +12,7 @@ from datetime import timedelta
 import pytest
 
 from prunebot.domain.models import Action, MemberState
-from prunebot.services.sweep import clear_flag, run_sweep
+from prunebot.services.sweep import run_sweep
 
 from .conftest import GUILD_ID, NOW, FakeGateway, make_info
 from .test_sweep_integration import make_config, seed_backfilled, with_activity
@@ -102,49 +102,56 @@ async def test_nothing_happens_a_day_before_the_deadline(env):
 # --------------------------------------------------------------- ways out again
 
 
-async def test_verifying_clears_the_flag_and_protects_for_the_grace_period(env):
+async def test_posting_clears_the_flag_at_the_next_sweep(env):
+    """The only self-service way out, and the reason the button was removed:
+    nothing short of actually posting takes the role off."""
     store = env
     member = make_info()
     gw = FakeGateway([member])
-    config = make_config()
 
     await sweep(gw, store, 0)
     gw.set_members([make_info(user_id=member.user_id, has_inactive_role=True)])
 
-    # Day 5: they press the button.
-    await clear_flag(
-        gateway=gw,
-        store=store,
-        config=config,
-        user_id=member.user_id,
-        reason="verified",
-        verified=True,
-        now=at(5),
-        dry_run=False,
-    )
+    # Still silent the next day: the role stays on.
+    await sweep(gw, store, 1)
+    assert gw.calls_of("remove_role") == []
+
+    # They post on day 2, and that day's sweep lifts it.
+    await with_activity(store, member.user_id, 1, day_offset=-2)
+    await sweep(gw, store, 2)
     assert gw.calls_of("remove_role") == [member.user_id]
-    gw.set_members([make_info(user_id=member.user_id, has_inactive_role=False)])
-
-    # Day 20: still inside the 30-day reverify grace, so still safe.
-    await sweep(gw, store, 20)
-    assert len(gw.calls_of("add_role")) == 1  # only the original flag
-
-    # Day 40: grace has expired and they are still silent, so they are flagged again.
-    await sweep(gw, store, 40)
-    assert len(gw.calls_of("add_role")) == 2
 
 
-async def test_posting_again_does_not_clear_the_flag(env):
-    """The user's explicit choice: only /verify or a moderator clears it."""
+async def test_an_old_verify_grant_no_longer_protects_anyone(env):
+    """Members who pressed the retired button hold a verified_at. Cancelling the
+    feature has to cancel those grants too, or they stay safe without posting."""
     store = env
     member = make_info()
+    await store.update_member(
+        GUILD_ID,
+        member.user_id,
+        state=MemberState.ACTIVE,
+        verified_at=int(at(-1).timestamp()),
+    )
     gw = FakeGateway([member])
 
     await sweep(gw, store, 0)
+
+    assert gw.calls_of("add_role") == [member.user_id]
+
+
+async def test_with_auto_clear_off_posting_does_not_clear_the_flag(env):
+    """No self-service route at all: only a moderator can lift it."""
+    store = env
+    member = make_info()
+    gw = FakeGateway([member])
+    config = make_config(kicking={"auto_clear_on_activity": False})
+
+    await sweep(gw, store, 0, config=config)
     gw.set_members([make_info(user_id=member.user_id, has_inactive_role=True)])
 
-    await with_activity(store, member.user_id, 50)  # they start chatting again
-    await sweep(gw, store, 5)
+    await with_activity(store, member.user_id, 50)
+    await sweep(gw, store, 5, config=config)
 
     assert gw.calls_of("remove_role") == []
     row = await store.get_member(GUILD_ID, member.user_id)

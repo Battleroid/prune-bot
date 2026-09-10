@@ -24,9 +24,9 @@ async def bot(tmp_path):
     instance = PruneBot(config, secrets)
     await instance.store.connect()
     instance.add_dynamic_items(
-        __import__("prunebot.ui.verify_button", fromlist=["VerifyButton"]).VerifyButton
+        __import__("prunebot.ui.verify_button", fromlist=["RetiredVerifyButton"]).RetiredVerifyButton
     )
-    for cog in ("prunebot.cogs.tracking", "prunebot.cogs.admin", "prunebot.cogs.verify"):
+    for cog in ("prunebot.cogs.tracking", "prunebot.cogs.admin"):
         await instance.load_extension(cog)
     try:
         yield instance
@@ -54,7 +54,7 @@ def test_unused_intents_stay_off():
 async def test_command_tree_has_the_expected_shape(bot):
     names = {c.name for c in bot.tree.get_commands()}
     assert "prune" in names
-    assert "verify" in names
+    assert "verify" not in names  # retired: posting is the only self-service route
 
     prune = discord.utils.get(bot.tree.get_commands(), name="prune")
     sub = {c.name for c in prune.commands}
@@ -90,10 +90,18 @@ async def test_whitelist_target_accepts_members_and_roles(bot):
     assert target.required is True
 
 
-async def test_verify_has_no_permission_gate(bot):
-    """The escape hatch has to work for the people being pruned."""
-    verify = discord.utils.get(bot.tree.get_commands(), name="verify")
-    assert verify.default_permissions is None
+async def test_the_retired_button_explains_itself_instead_of_failing():
+    """Warnings already sitting in people's DMs still show the old button."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    from prunebot.ui.verify_button import RETIRED, RetiredVerifyButton
+
+    button = RetiredVerifyButton(1, 2)
+    interaction = MagicMock()
+    interaction.response.send_message = AsyncMock()
+    interaction.message = None  # nothing to edit; must not raise
+    await button.callback(interaction)
+    interaction.response.send_message.assert_awaited_once_with(RETIRED, ephemeral=True)
 
 
 async def test_prune_group_requires_manage_guild(bot):

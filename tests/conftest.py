@@ -30,9 +30,8 @@ def make_policy(**overrides: Any) -> GuildPolicy:
         "min_messages": 1,
         "grace_days_after_join": 14,
         "kick_after_days": 90,
-        "reverify_grace_days": 30,
         "final_warning_lead_days": 3,
-        "auto_clear_on_activity": False,
+        "auto_clear_on_activity": True,
         "kicking_enabled": True,
         "require_warning_before_kick": False,
         "exempt_bots": True,
@@ -69,7 +68,6 @@ def make_snapshot(**overrides: Any) -> MemberSnapshot:
         "warned_at": None,
         "warn_delivery": None,
         "final_warned_at": None,
-        "verified_at": None,
         "pardoned_until": None,
         "display_name": "member",
     }

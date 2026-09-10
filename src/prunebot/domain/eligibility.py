@@ -21,11 +21,10 @@ R_WHITELIST_ROLE = "whitelist(role)"
 R_UNMANAGEABLE = "unmanageable(role_hierarchy_or_permissions)"
 R_CANNOT_KICK = "cannot_kick(role_hierarchy_or_permissions)"
 R_PARDONED = "pardoned"
-R_RECENTLY_VERIFIED = "recently_verified"
 R_NEW_MEMBER = "new_member(join_grace)"
 R_ACTIVE = "active"
 R_INACTIVE = "inactive"
-R_AWAITING_VERIFY = "flagged_awaiting_verify"
+R_AWAITING_MODERATOR = "flagged_awaiting_moderator"
 R_WARNING_UNDELIVERED = "warning_undelivered"
 R_NOT_DUE = "not_due"
 R_KICKING_DISABLED = "kicking_disabled"
@@ -33,14 +32,6 @@ R_KICKING_DISABLED = "kicking_disabled"
 
 def _pardon_active(snapshot: MemberSnapshot, now: datetime) -> bool:
     return snapshot.pardoned_until is not None and snapshot.pardoned_until > now
-
-
-def _verify_grace_active(
-    snapshot: MemberSnapshot, policy: GuildPolicy, now: datetime
-) -> bool:
-    if snapshot.verified_at is None:
-        return False
-    return now < snapshot.verified_at + timedelta(days=policy.reverify_grace_days)
 
 
 def _join_grace_active(
@@ -82,8 +73,6 @@ def exemptions(
         found.append(R_UNMANAGEABLE)
     if _pardon_active(snapshot, now):
         found.append(R_PARDONED)
-    if _verify_grace_active(snapshot, policy, now):
-        found.append(R_RECENTLY_VERIFIED)
     if _join_grace_active(snapshot, policy, now):
         found.append(R_NEW_MEMBER)
     return tuple(found)
@@ -123,15 +112,15 @@ def evaluate(
         # Deliberately not an UNFLAG: removing the role would also fail.
         return Decision(Action.SKIP, R_UNMANAGEABLE, all_exemptions)
 
-    # --- 5-7: temporary protections ---------------------------------------------
+    # --- 5-6: temporary protections ---------------------------------------------
+    # Deliberately no self-service grace: members used to be able to press a
+    # button for a month of immunity without posting a word.
     if _pardon_active(snapshot, now):
         return protect(R_PARDONED)
-    if _verify_grace_active(snapshot, policy, now):
-        return protect(R_RECENTLY_VERIFIED)
     if _join_grace_active(snapshot, policy, now):
         return Decision(Action.SKIP, R_NEW_MEMBER, all_exemptions)
 
-    # --- 8: the actual activity test --------------------------------------------
+    # --- 7: the actual activity test --------------------------------------------
     active = is_active(snapshot, policy)
 
     if not flagged:
@@ -139,12 +128,13 @@ def evaluate(
             return Decision(Action.NONE, R_ACTIVE, all_exemptions)
         return Decision(Action.FLAG, R_INACTIVE, all_exemptions)
 
-    # --- 9: they are already flagged ---------------------------------------------
+    # --- 8: they are already flagged ---------------------------------------------
     if active:
+        # Posting back over the threshold is the only way a member clears their
+        # own flag. With auto-clear off there is no self-service route at all.
         if policy.auto_clear_on_activity:
             return Decision(Action.UNFLAG, R_ACTIVE, all_exemptions)
-        # Posting again does not clear the flag; only /verify or a moderator does.
-        return Decision(Action.NONE, R_AWAITING_VERIFY, all_exemptions)
+        return Decision(Action.NONE, R_AWAITING_MODERATOR, all_exemptions)
 
     # The kick clock runs from when the warning was *delivered*, never from
     # flagged_at -- nobody is kicked on a timer that started before they were told.

@@ -39,7 +39,6 @@ def policy_from_config(config: Config) -> GuildPolicy:
         min_messages=config.activity.min_messages,
         grace_days_after_join=config.flagging.grace_days_after_join,
         kick_after_days=config.kicking.kick_after_days,
-        reverify_grace_days=config.kicking.reverify_grace_days,
         final_warning_lead_days=config.kicking.final_warning_lead_days,
         auto_clear_on_activity=config.kicking.auto_clear_on_activity,
         kicking_enabled=config.kicking.enabled,
@@ -326,16 +325,15 @@ async def clear_flag(
     reason: str,
     actor_id: int | None = None,
     new_state: MemberState = MemberState.ACTIVE,
-    verified: bool = False,
     pardon_days: int | None = None,
     dry_run: bool | None = None,
     now: datetime | None = None,
 ) -> bool:
     """Immediately clear one member's flag.
 
-    Used by /verify, the warning button, /prune pardon and /prune whitelist add.
-    These act at once rather than waiting for the next nightly sweep, because an
-    admin (or a member clicking a button) expects to see the result now.
+    Used by /prune pardon and /prune whitelist add, which act at once rather than
+    waiting for the next sweep because a moderator expects to see the result now.
+    It grants no grace of its own: only a pardon does that.
     """
     effective_dry_run = config.safety.dry_run if dry_run is None else dry_run
     moment = now or datetime.now(tz=UTC)
@@ -355,8 +353,6 @@ async def clear_flag(
     if not effective_dry_run:
         stamp = int(moment.timestamp())
         fields: dict[str, object] = {}
-        if verified:
-            fields["verified_at"] = stamp
         if pardon_days is not None:
             fields["pardoned_until"] = stamp + pardon_days * 86400
             fields["state"] = MemberState.PARDONED
