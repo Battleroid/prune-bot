@@ -294,3 +294,71 @@ async def test_backfill_refuses_to_run_before_the_cache_is_populated(store):
 
     meta = await store.guild_meta(GUILD_ID)
     assert meta["backfilled_at"] is None
+
+
+
+# ------------------------------------------------------------- /prune status
+
+
+def _status_fields(**kwargs):
+    from prunebot.domain.models import Action, Decision
+    from prunebot.ui.embeds import status_embed
+
+    from .conftest import NOW
+
+    embed = status_embed(
+        snapshot=kwargs.pop("snapshot"),
+        decision=kwargs.pop("decision", Decision(Action.NONE, "active")),
+        window_days=30,
+        min_messages=10,
+        kick_after_days=90,
+        daily={},
+        now=NOW,
+        **kwargs,
+    )
+    return {field.name: field.value for field in embed.fields}
+
+
+def test_status_shows_an_exact_last_post_when_the_bot_saw_it():
+    from datetime import timedelta
+
+    from .conftest import NOW, make_snapshot
+
+    fields = _status_fields(
+        snapshot=make_snapshot(message_count=12), last_post=NOW - timedelta(hours=3)
+    )
+    assert fields["Last post"].startswith("<t:")
+
+
+def test_status_falls_back_to_the_day_for_older_history():
+    from prunebot.domain.windows import day_of
+
+    from .conftest import NOW, make_snapshot
+
+    fields = _status_fields(
+        snapshot=make_snapshot(message_count=12), last_active_day=day_of(NOW) - 8
+    )
+    assert fields["Last post"] == "about 8 days ago"
+
+
+def test_status_says_when_nothing_is_recorded():
+    from .conftest import make_snapshot
+
+    assert _status_fields(snapshot=make_snapshot(message_count=0))["Last post"] == "none recorded"
+
+
+def test_status_shows_how_long_until_they_would_be_flagged():
+    from .conftest import make_snapshot
+
+    fields = _status_fields(snapshot=make_snapshot(message_count=12), days_until_flag=6)
+    assert fields["Flagged in"] == "~6 days if they stop posting"
+
+
+def test_status_shows_what_a_flagged_member_needs_to_clear_it():
+    from prunebot.domain.models import MemberState
+
+    from .conftest import make_snapshot
+
+    snap = make_snapshot(message_count=3, state=MemberState.FLAGGED, has_inactive_role=True)
+    fields = _status_fields(snapshot=snap, days_until_flag=0)
+    assert fields["To clear the flag"] == "7 more message(s) in the last 30d"

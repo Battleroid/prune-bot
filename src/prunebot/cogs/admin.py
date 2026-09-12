@@ -17,12 +17,14 @@ from discord import app_commands
 from discord.ext import commands
 
 from ..config import RUNTIME_SAFE_KEYS, ConfigError, parse_override
+from ..domain import eligibility as el
 from ..domain.models import Action, MemberState
-from ..domain.windows import window_start_day
+from ..domain.windows import day_of, days_until_inactive, from_epoch, window_start_day
 from ..services.backfill import BackfillRunner
 from ..services.sweep import (
     build_sweep_plan,
     clear_flag,
+    flag_member,
     flagged_members,
     pardon_all,
     status_for,
@@ -124,6 +126,65 @@ def build_whitelist_pages(entries, guild) -> list[discord.Embed]:
             text=f"Page {n}/{len(embeds)} - tidy up stale entries with /prune whitelist remove"
         )
     return embeds
+
+
+def manual_flag_message(result, member, config) -> str:
+    """Explain a /prune flag outcome. A refusal names the exact rule that applied."""
+    snap = result.snapshot
+    code = result.reason
+    if result.flagged:
+        if not result.dm_delivered:
+            return (
+                f"Flagged {member.mention}, but their DMs are closed, so the warning DM "
+                f"did not arrive."
+            )
+        return f"Flagged {member.mention}: role on, warning sent."
+    if code == "not_in_guild":
+        return "That member is not in this server."
+    if code == "already_flagged":
+        return f"{member.mention} is already flagged."
+    if code == "backfill_incomplete":
+        return f"Not flagging anyone yet: {result.detail}."
+    if code == "dry_run":
+        return (
+            f"Dry run is on, so nothing changed. With it off, {member.mention} would "
+            f"have been flagged."
+        )
+    if code == "failed":
+        return f"Could not flag {member.mention}: {result.detail or 'Discord refused'}."
+    if code == el.R_ACTIVE:
+        return (
+            f"Not flagged: {member.mention} has **{snap.message_count}** messages in the "
+            f"last {config.activity.window_days} days (the line is "
+            f"{config.activity.min_messages}), so the next sweep would just lift it."
+        )
+    if code == el.R_NEW_MEMBER:
+        return (
+            f"Not flagged: {member.mention} joined {relative(snap.joined_at)}, and new "
+            f"members get {config.flagging.grace_days_after_join} days before they can "
+            f"be flagged."
+        )
+    if code == el.R_PARDONED:
+        return (
+            f"Not flagged: {member.mention} is pardoned until "
+            f"{discord.utils.format_dt(snap.pardoned_until, 'D')}."
+        )
+    if code in (el.R_WHITELIST_USER, el.R_WHITELIST_ROLE):
+        how = "directly" if code == el.R_WHITELIST_USER else "through a role"
+        return (
+            f"Not flagged: {member.mention} is whitelisted {how}. Take them off the "
+            f"whitelist first if you mean it."
+        )
+    if code == el.R_UNMANAGEABLE:
+        return (
+            f"Not flagged: {member.mention}'s highest role is above mine, so I cannot "
+            f"give them the role."
+        )
+    if code == el.R_OWNER:
+        return "Not flagged: that is the server owner, whom Discord will not let bots act on."
+    if code == el.R_BOT:
+        return "Not flagged: bots are exempt."
+    return f"Not flagged ({code})."
 
 
 async def _whitelist_add(
@@ -384,6 +445,7 @@ class PruneGroup(app_commands.Group):
         bot = interaction.client
         member = member or interaction.user
         await interaction.response.defer(ephemeral=True)
+        await bot.activity_buffer.flush()  # include what was said seconds ago
 
         config = await bot.config_for(interaction.guild_id)
         gateway = await bot.gateway_for(interaction.guild_id)
@@ -404,6 +466,7 @@ class PruneGroup(app_commands.Group):
             member.id,
             window_start_day(now, config.activity.window_days),
         )
+        row = await bot.store.get_member(interaction.guild_id, member.id)
         await interaction.followup.send(
             embed=status_embed(
                 snapshot=snapshot,
@@ -413,6 +476,16 @@ class PruneGroup(app_commands.Group):
                 kick_after_days=config.kicking.kick_after_days,
                 daily=daily,
                 now=now,
+                last_post=from_epoch(row.last_message_at) if row else None,
+                last_active_day=await bot.store.last_active_day(
+                    interaction.guild_id, member.id
+                ),
+                days_until_flag=days_until_inactive(
+                    daily,
+                    day_of(now),
+                    config.activity.window_days,
+                    config.activity.min_messages,
+                ),
             ),
             ephemeral=True,
         )
@@ -647,6 +720,38 @@ class PruneGroup(app_commands.Group):
         if result.unmanageable:
             lines.append(f"{len(result.unmanageable)} skipped: above my role.")
         await interaction.followup.send("\n".join(lines), ephemeral=True)
+
+    # -------------------------------------------------------------------- flag
+
+    @app_commands.command(
+        name="flag",
+        description="Flag a member now, if the rules would flag them at the next sweep.",
+    )
+    @app_commands.describe(member="Who to flag", reason="Recorded in the audit log")
+    async def flag_command(
+        self,
+        interaction: discord.Interaction,
+        member: discord.Member,
+        reason: str | None = None,
+    ) -> None:
+        bot = interaction.client
+        await interaction.response.defer(ephemeral=True)
+        config = await bot.config_for(interaction.guild_id)
+        gateway = await bot.gateway_for(interaction.guild_id)
+        # Count everything said up to this moment, so nobody is flagged for
+        # messages still sitting in the buffer.
+        await bot.activity_buffer.flush()
+        result = await flag_member(
+            gateway=gateway,
+            store=bot.store,
+            config=config,
+            user_id=member.id,
+            reason=reason or "flagged by a moderator",
+            actor_id=interaction.user.id,
+        )
+        await interaction.followup.send(
+            manual_flag_message(result, member, config), ephemeral=True
+        )
 
     # ------------------------------------------------------------------ backfill
 

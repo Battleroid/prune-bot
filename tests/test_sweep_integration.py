@@ -733,3 +733,110 @@ async def test_pardon_all_leaves_one_bulk_audit_record(env):
     bulk = [r for r in rows if r["action"] == "pardon_all"]
     assert len(bulk) == 1
     assert bulk[0]["actor_id"] == 42
+
+
+
+# ------------------------------------------------------------------ manual flag
+
+
+async def _refusal(store, gw, member, config=None):
+    from prunebot.services.sweep import flag_member
+
+    result = await flag_member(
+        gateway=gw,
+        store=store,
+        config=config or make_config(),
+        user_id=member.user_id,
+        reason="x",
+        now=NOW,
+    )
+    assert not result.flagged
+    assert gw.mutations == []
+    return result.reason
+
+
+async def test_manual_flag_acts_when_the_sweep_would(env):
+    from prunebot.services.sweep import flag_member
+
+    store = env
+    member = make_info()
+    gw = FakeGateway([member])
+
+    result = await flag_member(
+        gateway=gw, store=store, config=make_config(),
+        user_id=member.user_id, reason="lurker", actor_id=42, now=NOW,
+    )
+
+    assert result.flagged and result.reason == "flagged"
+    assert gw.calls_of("add_role") == [member.user_id]
+    assert gw.calls_of("warn:initial") == [member.user_id]
+    assert gw.calls_of("announce") == [member.user_id]
+    row = await store.get_member(GUILD_ID, member.user_id)
+    assert row.state is MemberState.FLAGGED
+    history = await store.user_history(GUILD_ID, member.user_id)
+    assert any(r["action"] == "flag" and r["actor_id"] == 42 for r in history)
+
+
+async def test_manual_flag_refuses_an_active_member(env):
+    """Same rule as everyone: the next sweep would only lift it again."""
+    from prunebot.domain import eligibility as el
+
+    member = make_info()
+    await with_activity(env, member.user_id, 5)
+    assert await _refusal(env, FakeGateway([member]), member) == el.R_ACTIVE
+
+
+async def test_manual_flag_refuses_the_whitelisted(env):
+    from prunebot.domain import eligibility as el
+
+    member = make_info()
+    await env.whitelist_add(GUILD_ID, "user", member.user_id)
+    assert await _refusal(env, FakeGateway([member]), member) == el.R_WHITELIST_USER
+
+
+async def test_manual_flag_refuses_new_members(env):
+    from prunebot.domain import eligibility as el
+
+    member = make_info(joined_at=days_ago(2))
+    assert await _refusal(env, FakeGateway([member]), member) == el.R_NEW_MEMBER
+
+
+async def test_manual_flag_refuses_the_pardoned(env):
+    from prunebot.domain import eligibility as el
+
+    member = make_info()
+    await env.update_member(
+        GUILD_ID,
+        member.user_id,
+        state=MemberState.PARDONED,
+        pardoned_until=int((NOW + timedelta(days=10)).timestamp()),
+    )
+    assert await _refusal(env, FakeGateway([member]), member) == el.R_PARDONED
+
+
+async def test_manual_flag_refuses_members_above_the_bot(env):
+    from prunebot.domain import eligibility as el
+
+    member = make_info(bot_can_manage=False)
+    assert await _refusal(env, FakeGateway([member]), member) == el.R_UNMANAGEABLE
+
+
+async def test_manual_flag_refuses_someone_already_flagged(env):
+    member = make_info(has_inactive_role=True)
+    assert await _refusal(env, FakeGateway([member]), member) == "already_flagged"
+
+
+async def test_manual_flag_respects_dry_run(env):
+    member = make_info()
+    config = make_config(safety={"dry_run": True})
+    assert await _refusal(env, FakeGateway([member]), member, config) == "dry_run"
+
+
+async def test_manual_flag_waits_for_the_backfill(store):
+    member = make_info()  # deliberately not seeded: backfill never completed
+    assert await _refusal(store, FakeGateway([member]), member) == "backfill_incomplete"
+
+
+async def test_manual_flag_of_someone_not_in_the_server(env):
+    member = make_info()
+    assert await _refusal(env, FakeGateway([]), member) == "not_in_guild"

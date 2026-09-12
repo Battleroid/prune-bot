@@ -167,7 +167,7 @@ member-facing command: the one thing a flagged member can do is post.
 
 | Command | Purpose |
 |---|---|
-| `/prune status [member]` | Message count in the window, a per-day sparkline, current state, when the kick is due, and **every** exemption that applies |
+| `/prune status [member]` | Message count in the window, a per-day sparkline, their **last post**, **how many days until they'd be flagged** if they stop posting (or how many more messages clear an existing flag), when the kick is due, and **every** exemption that applies |
 | `/prune preview` | What the next sweep would do. Changes nothing |
 | `/prune run [dry_run]` | Run a sweep now. A live run shows the numbers and asks for confirmation first |
 | `/prune whitelist add <target> [reason]` | Permanently exempt a **member or role** — one mentionable picker handles both. Unflags them immediately |
@@ -175,6 +175,7 @@ member-facing command: the one thing a flagged member can do is post.
 | **Whitelist User** (right-click → Apps) | Same as `whitelist add`, from a member's context menu |
 | `/prune pardon <member> [days] [reason]` | Temporary protection, and unflags. Contrast the whitelist, which is permanent |
 | `/prune pardon-all [days] [reason]` | Pardon **everyone** currently flagged at once, after a confirmation showing how many. Members above the bot's role are skipped and reported |
+| `/prune flag <member> [reason]` | Flag someone now instead of waiting for the next sweep, **but only if the sweep would flag them**. Anyone the rules protect (active, whitelisted, pardoned, new, above the bot's role) is refused with the reason. Respects dry run |
 | `/prune config show` / `set` / `clear` | Inspect settings; change the runtime-safe subset |
 | `/prune backfill [channel] [force]` | Rescan history to rebuild counts |
 | `/prune stats` | Population, how many are below threshold, backfill status, dry-run state |

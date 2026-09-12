@@ -90,6 +90,9 @@ def status_embed(
     kick_after_days: int,
     daily: dict[int, int],
     now: datetime,
+    last_post: datetime | None = None,
+    last_active_day: int | None = None,
+    days_until_flag: int | None = None,
 ) -> discord.Embed:
     verdict = {
         Action.FLAG: "Would be flagged by the next sweep",
@@ -118,6 +121,40 @@ def status_embed(
     )
     embed.add_field(name="State", value=snapshot.state.value, inline=True)
     embed.add_field(name="Joined", value=relative(snapshot.joined_at), inline=True)
+
+    # Exact when the bot saw it live. For older posts only the day is known,
+    # because history was stored as daily counts.
+    if last_post is not None:
+        seen = relative(last_post)
+    elif last_active_day is not None:
+        ago = day_of(now) - last_active_day
+        seen = "today" if ago <= 0 else f"about {ago} day{'s' if ago != 1 else ''} ago"
+    else:
+        seen = "none recorded"
+    embed.add_field(name="Last post", value=seen, inline=True)
+
+    flagged = snapshot.state.value == "flagged" or snapshot.has_inactive_role
+    if flagged:
+        if decision.action is Action.UNFLAG:
+            clear = "lifts at the next sweep"
+        else:
+            short = max(0, min_messages - snapshot.message_count)
+            clear = (
+                f"{short} more message(s) in the last {window_days}d"
+                if short
+                else "only a moderator can lift it"
+            )
+        embed.add_field(name="To clear the flag", value=clear, inline=True)
+    elif decision.action is Action.SKIP:
+        embed.add_field(name="Flagged in", value="not while exempt", inline=True)
+    elif days_until_flag is not None:
+        countdown = (
+            "at the next sweep"
+            if days_until_flag <= 0
+            else f"~{days_until_flag} day{'s' if days_until_flag != 1 else ''} "
+            f"if they stop posting"
+        )
+        embed.add_field(name="Flagged in", value=countdown, inline=True)
 
     if snapshot.flagged_at:
         embed.add_field(name="Flagged", value=relative(snapshot.flagged_at), inline=True)

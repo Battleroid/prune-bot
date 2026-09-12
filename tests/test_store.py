@@ -234,3 +234,12 @@ async def test_backup_writes_a_readable_copy(store, tmp_path):
 
     with pytest.raises(FileExistsError):
         await store.backup_to(target)
+
+
+
+async def test_last_active_day_is_the_latest_bucket_with_messages(store):
+    await store.bump_activity(
+        [(GUILD_ID, 1, 100, 2), (GUILD_ID, 1, 140, 1), (GUILD_ID, 2, 150, 1)]
+    )
+    assert await store.last_active_day(GUILD_ID, 1) == 140
+    assert await store.last_active_day(GUILD_ID, 3) is None

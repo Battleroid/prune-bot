@@ -74,3 +74,29 @@ def test_epoch_roundtrip():
     moment = datetime(2026, 6, 15, 12, 34, 56, tzinfo=UTC)
     assert w.from_epoch(w.to_epoch(moment)) == moment
     assert w.from_epoch(None) is None
+
+
+
+# ------------------------------------------------------------- flag countdown
+
+
+def test_days_until_inactive_counts_down_from_the_oldest_post_keeping_them_over():
+    today = 1000
+    assert w.days_until_inactive({today: 1}, today, 30, 1) == 30
+    # the only message was 29 days ago, so it leaves the window tomorrow
+    assert w.days_until_inactive({today - 29: 1}, today, 30, 1) == 1
+
+
+def test_days_until_inactive_is_zero_when_already_under_the_line():
+    assert w.days_until_inactive({}, 1000, 30, 1) == 0
+    assert w.days_until_inactive({1000: 9}, 1000, 30, 10) == 0
+
+
+def test_days_until_inactive_ignores_buckets_outside_the_window():
+    assert w.days_until_inactive({1000 - 30: 50}, 1000, 30, 1) == 0
+
+
+def test_days_until_inactive_with_a_higher_threshold():
+    today = 1000
+    # 6 today and 4 ten days ago: the 10th most recent message is 10 days old
+    assert w.days_until_inactive({today: 6, today - 10: 4}, today, 30, 10) == 20

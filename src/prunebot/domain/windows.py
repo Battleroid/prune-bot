@@ -73,3 +73,22 @@ def elapsed_days(since: datetime | None, now: datetime) -> float | None:
 def sum_window(buckets: dict[int, int], since_day: int) -> int:
     """Total messages in buckets at or after `since_day`."""
     return sum(count for day, count in buckets.items() if day >= since_day)
+
+
+def days_until_inactive(
+    buckets: dict[int, int], today: int, window_days: int, min_messages: int
+) -> int:
+    """Whole days until a member would first count as inactive if they never post
+    again. 0 means they already do.
+
+    Walk back from the most recent day adding up messages. The day on which the
+    running total reaches `min_messages` is the oldest bucket still keeping them
+    over the line, and they drop below it the day that bucket leaves the window.
+    """
+    start = today - window_days + 1
+    total = 0
+    for day in sorted((d for d in buckets if start <= d <= today), reverse=True):
+        total += buckets[day]
+        if total >= min_messages:
+            return day + window_days - today
+    return 0

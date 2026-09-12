@@ -142,6 +142,16 @@ class Store:
         ) as cur:
             return {row["day"]: row["msg_count"] for row in await cur.fetchall()}
 
+    async def last_active_day(self, guild_id: int, user_id: int) -> int | None:
+        """Most recent day bucket with any messages, across the whole retention."""
+        async with self.db.execute(
+            "SELECT MAX(day) FROM activity_daily "
+            "WHERE guild_id = ? AND user_id = ? AND msg_count > 0",
+            (guild_id, user_id),
+        ) as cur:
+            row = await cur.fetchone()
+        return row[0] if row and row[0] is not None else None
+
     async def prune_activity(self, before_day: int) -> int:
         cur = await self.db.execute(
             "DELETE FROM activity_daily WHERE day < ?", (before_day,)

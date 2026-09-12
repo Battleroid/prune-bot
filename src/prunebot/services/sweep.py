@@ -475,3 +475,76 @@ async def status_for(
         whitelist_roles=whitelist_roles,
     )[0]
     return snapshot, evaluate(snapshot, policy_from_config(config), now)
+
+
+@dataclass
+class ManualFlagResult:
+    flagged: bool
+    #: "flagged", "not_in_guild", "already_flagged", "backfill_incomplete",
+    #: "dry_run", "failed", or the eligibility reason the sweep would give.
+    reason: str
+    snapshot: MemberSnapshot | None = None
+    decision: object = None
+    detail: str = ""
+    dm_delivered: bool = True
+
+
+async def flag_member(
+    *,
+    gateway: GuildGateway,
+    store: Store,
+    config: Config,
+    user_id: int,
+    reason: str,
+    actor_id: int | None = None,
+    now: datetime | None = None,
+) -> ManualFlagResult:
+    """Flag one member now -- but only if the sweep itself would.
+
+    Runs the exact decision the sweep uses for this member. If it says FLAG, act
+    immediately instead of waiting for the next sweep; anything else is refused
+    with the reason. So a manual flag can never land on someone the rules protect,
+    nor on someone the next sweep would simply lift it from again.
+
+    Respects dry run: flagging is the risky direction, and dry run promises to
+    change nothing.
+    """
+    moment = now or datetime.now(tz=UTC)
+    snapshot, decision = await status_for(
+        gateway=gateway, store=store, config=config, user_id=user_id, now=moment
+    )
+    if snapshot is None:
+        return ManualFlagResult(False, "not_in_guild")
+    if snapshot.state is MemberState.FLAGGED or snapshot.has_inactive_role:
+        return ManualFlagResult(False, "already_flagged", snapshot, decision)
+    if config.safety.require_backfill_before_action:
+        blocked = await _backfill_gate(store, gateway.guild_id, config, moment)
+        if blocked:
+            return ManualFlagResult(False, "backfill_incomplete", snapshot, decision, blocked)
+    if decision.action is not Action.FLAG:
+        return ManualFlagResult(False, decision.reason, snapshot, decision)
+    if config.safety.dry_run:
+        return ManualFlagResult(False, "dry_run", snapshot, decision)
+
+    executor = ActionExecutor(
+        gateway=gateway,
+        store=store,
+        guild_id=gateway.guild_id,
+        sweep_id="manual-flag",
+        dry_run=False,
+        now=moment,
+        action_delay_seconds=0.0,
+        post_every_action=config.audit.post_every_action,
+        actor_id=actor_id,
+    )
+    ok = await executor.flag(
+        user_id, reason=reason, days_left=config.kicking.kick_after_days
+    )
+    return ManualFlagResult(
+        ok,
+        "flagged" if ok else "failed",
+        snapshot,
+        decision,
+        "" if ok else "; ".join(executor.report.failures),
+        dm_delivered=executor.report.warnings_undelivered == 0,
+    )
