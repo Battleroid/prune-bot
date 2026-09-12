@@ -59,6 +59,7 @@ async def reconcile(
                     warned_at=None,
                     warn_delivery=None,
                     final_warned_at=None,
+                    forced_at=None,
                 )
                 await store.add_audit(
                     guild_id,
@@ -81,6 +82,7 @@ async def reconcile(
                     warned_at=None,
                     warn_delivery=None,
                     final_warned_at=None,
+                    forced_at=None,
                 )
                 await store.add_audit(
                     guild_id,

@@ -28,6 +28,13 @@ R_AWAITING_MODERATOR = "flagged_awaiting_moderator"
 R_WARNING_UNDELIVERED = "warning_undelivered"
 R_NOT_DUE = "not_due"
 R_KICKING_DISABLED = "kicking_disabled"
+R_FORCED_POSTING = "forced_flag(still_posting)"
+
+#: What even `/prune flag force:true` cannot get past: the whitelist's promise,
+#: exempt bots, and the members Discord will not let the bot act on.
+UNOVERRIDABLE = frozenset(
+    {R_BOT, R_OWNER, R_WHITELIST_USER, R_WHITELIST_ROLE, R_UNMANAGEABLE}
+)
 
 
 def _pardon_active(snapshot: MemberSnapshot, now: datetime) -> bool:
@@ -73,7 +80,8 @@ def exemptions(
         found.append(R_UNMANAGEABLE)
     if _pardon_active(snapshot, now):
         found.append(R_PARDONED)
-    if _join_grace_active(snapshot, policy, now):
+    # A forced flag already overrode join grace, so it protects nothing.
+    if _join_grace_active(snapshot, policy, now) and not snapshot.forced:
         found.append(R_NEW_MEMBER)
     return tuple(found)
 
@@ -117,7 +125,7 @@ def evaluate(
     # button for a month of immunity without posting a word.
     if _pardon_active(snapshot, now):
         return protect(R_PARDONED)
-    if _join_grace_active(snapshot, policy, now):
+    if _join_grace_active(snapshot, policy, now) and not snapshot.forced:
         return Decision(Action.SKIP, R_NEW_MEMBER, all_exemptions)
 
     # --- 7: the actual activity test --------------------------------------------
@@ -129,7 +137,17 @@ def evaluate(
         return Decision(Action.FLAG, R_INACTIVE, all_exemptions)
 
     # --- 8: they are already flagged ---------------------------------------------
-    if active:
+    if snapshot.forced:
+        # A moderator overrode the rules, so posting from before the flag cannot
+        # clear it: only enough posted since.
+        if snapshot.messages_since_forced >= policy.min_messages:
+            if policy.auto_clear_on_activity:
+                return Decision(Action.UNFLAG, R_ACTIVE, all_exemptions)
+            return Decision(Action.NONE, R_AWAITING_MODERATOR, all_exemptions)
+        if active:
+            # Stays flagged, but nobody over the posting line is ever kicked.
+            return Decision(Action.NONE, R_FORCED_POSTING, all_exemptions)
+    elif active:
         # Posting back over the threshold is the only way a member clears their
         # own flag. With auto-clear off there is no self-service route at all.
         if policy.auto_clear_on_activity:

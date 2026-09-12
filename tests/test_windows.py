@@ -100,3 +100,22 @@ def test_days_until_inactive_with_a_higher_threshold():
     today = 1000
     # 6 today and 4 ten days ago: the 10th most recent message is 10 days old
     assert w.days_until_inactive({today: 6, today - 10: 4}, today, 30, 10) == 20
+
+
+# ------------------------------------------------------ posts since a forced flag
+
+
+def test_messages_since_leaves_out_what_came_before_the_flag_that_day():
+    buckets = {98: 7, 100: 5, 101: 2}
+    # 3 of the 5 on the flag day were posted before the flag
+    assert w.messages_since(buckets, since_day=100, baseline=3, window_start=90) == 4
+
+
+def test_messages_since_only_counts_the_window():
+    buckets = {100: 5, 125: 2, 130: 1}
+    # the flag day has aged out of the window, taking its baseline with it
+    assert w.messages_since(buckets, since_day=100, baseline=5, window_start=125) == 3
+
+
+def test_messages_since_never_goes_negative():
+    assert w.messages_since({100: 2}, since_day=100, baseline=5, window_start=90) == 0

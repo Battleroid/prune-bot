@@ -10,22 +10,24 @@ from __future__ import annotations
 
 import logging
 import uuid
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 
 from ..config import Config
 from ..db.store import Store
-from ..domain.eligibility import evaluate
+from ..domain.eligibility import UNOVERRIDABLE, evaluate
 from ..domain.models import (
     Action,
     GuildPolicy,
     MemberSnapshot,
     MemberState,
+    MemberStateRow,
     SweepPlan,
 )
 from ..domain.planner import build_plan
 from ..domain.snapshot import build_snapshots
-from ..domain.windows import window_start_day
+from ..domain.windows import day_of, messages_since, window_start_day
 from ..gateway import GuildGateway
 from .actions import ActionExecutor, ExecutionReport
 from .reconcile import ReconcileReport, reconcile
@@ -99,6 +101,29 @@ async def _backfill_gate(
     return None
 
 
+async def _since_forced_counts(
+    store: Store, guild_id: int, rows: Mapping[int, MemberStateRow], window_start: int
+) -> dict[int, int]:
+    """Messages each force-flagged member has posted since the flag, in the window.
+
+    Forced flags are rare, so one small query each beats widening the
+    whole-guild count.
+    """
+    counts: dict[int, int] = {}
+    for user_id, row in rows.items():
+        if row.forced_at is None or row.state is not MemberState.FLAGGED:
+            continue
+        flag_day = day_of(row.forced_at)
+        buckets = await store.user_daily(guild_id, user_id, max(flag_day, window_start))
+        counts[user_id] = messages_since(
+            buckets,
+            since_day=flag_day,
+            baseline=row.forced_baseline,
+            window_start=window_start,
+        )
+    return counts
+
+
 async def build_sweep_plan(
     *,
     gateway: GuildGateway,
@@ -141,6 +166,7 @@ async def build_sweep_plan(
         rows=rows,
         whitelist_users=whitelist_users,
         whitelist_roles=whitelist_roles,
+        since_forced=await _since_forced_counts(store, guild_id, rows, since_day),
     )
 
     plan = build_plan(
@@ -473,6 +499,7 @@ async def status_for(
         rows=rows,
         whitelist_users=whitelist_users,
         whitelist_roles=whitelist_roles,
+        since_forced=await _since_forced_counts(store, gateway.guild_id, rows, since_day),
     )[0]
     return snapshot, evaluate(snapshot, policy_from_config(config), now)
 
@@ -487,6 +514,7 @@ class ManualFlagResult:
     decision: object = None
     detail: str = ""
     dm_delivered: bool = True
+    forced: bool = False
 
 
 async def flag_member(
@@ -497,34 +525,53 @@ async def flag_member(
     user_id: int,
     reason: str,
     actor_id: int | None = None,
+    force: bool = False,
     now: datetime | None = None,
 ) -> ManualFlagResult:
-    """Flag one member now -- but only if the sweep itself would.
+    """Flag one member now.
 
-    Runs the exact decision the sweep uses for this member. If it says FLAG, act
-    immediately instead of waiting for the next sweep; anything else is refused
-    with the reason. So a manual flag can never land on someone the rules protect,
-    nor on someone the next sweep would simply lift it from again.
+    Without `force`, only if the sweep itself would: this runs the exact decision
+    the sweep uses for this member and refuses anything but FLAG, with the
+    reason. So a plain manual flag never lands on someone the rules protect, nor
+    on someone the next sweep would simply lift it from again.
 
-    Respects dry run: flagging is the risky direction, and dry run promises to
-    change nothing.
+    With `force`, a moderator overrides the activity rules, a pardon, join grace,
+    and the backfill gate (the flag no longer rests on the counts). It still
+    cannot touch anything in `UNOVERRIDABLE`. A forced flag only lifts once they
+    post enough *after* it, so the next sweep does not simply undo it.
+
+    Respects dry run either way: flagging is the risky direction, and dry run
+    promises to change nothing.
     """
     moment = now or datetime.now(tz=UTC)
     snapshot, decision = await status_for(
         gateway=gateway, store=store, config=config, user_id=user_id, now=moment
     )
     if snapshot is None:
-        return ManualFlagResult(False, "not_in_guild")
+        return ManualFlagResult(False, "not_in_guild", forced=force)
     if snapshot.state is MemberState.FLAGGED or snapshot.has_inactive_role:
-        return ManualFlagResult(False, "already_flagged", snapshot, decision)
-    if config.safety.require_backfill_before_action:
-        blocked = await _backfill_gate(store, gateway.guild_id, config, moment)
-        if blocked:
-            return ManualFlagResult(False, "backfill_incomplete", snapshot, decision, blocked)
-    if decision.action is not Action.FLAG:
-        return ManualFlagResult(False, decision.reason, snapshot, decision)
+        return ManualFlagResult(False, "already_flagged", snapshot, decision, forced=force)
+    if force:
+        if decision.reason in UNOVERRIDABLE:
+            return ManualFlagResult(False, decision.reason, snapshot, decision, forced=True)
+    else:
+        if config.safety.require_backfill_before_action:
+            blocked = await _backfill_gate(store, gateway.guild_id, config, moment)
+            if blocked:
+                return ManualFlagResult(
+                    False, "backfill_incomplete", snapshot, decision, blocked
+                )
+        if decision.action is not Action.FLAG:
+            return ManualFlagResult(False, decision.reason, snapshot, decision)
     if config.safety.dry_run:
-        return ManualFlagResult(False, "dry_run", snapshot, decision)
+        return ManualFlagResult(False, "dry_run", snapshot, decision, forced=force)
+
+    baseline = None
+    if force:
+        # Whatever they posted earlier today came before the flag. The command
+        # flushes the live buffer first, so this is up to the moment.
+        today = day_of(moment)
+        baseline = (await store.user_daily(gateway.guild_id, user_id, today)).get(today, 0)
 
     executor = ActionExecutor(
         gateway=gateway,
@@ -538,7 +585,10 @@ async def flag_member(
         actor_id=actor_id,
     )
     ok = await executor.flag(
-        user_id, reason=reason, days_left=config.kicking.kick_after_days
+        user_id,
+        reason=reason,
+        days_left=config.kicking.kick_after_days,
+        forced_baseline=baseline,
     )
     return ManualFlagResult(
         ok,
@@ -547,4 +597,5 @@ async def flag_member(
         decision,
         "" if ok else "; ".join(executor.report.failures),
         dm_delivered=executor.report.warnings_undelivered == 0,
+        forced=force,
     )

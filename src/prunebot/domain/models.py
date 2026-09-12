@@ -64,6 +64,10 @@ class MemberStateRow:
     left_at: int | None = None
     rejoin_count: int = 0
     flagged_on_leave: bool = False
+    #: When a moderator forced the flag with /prune flag force:true, else None.
+    forced_at: int | None = None
+    #: Messages already counted on the day of a forced flag, i.e. before it.
+    forced_baseline: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -120,11 +124,20 @@ class MemberSnapshot:
     warn_delivery: str | None = None
     final_warned_at: datetime | None = None
     pardoned_until: datetime | None = None
+    forced_at: datetime | None = None
+    #: Messages in the window posted since a forced flag; 0 when not forced.
+    messages_since_forced: int = 0
     display_name: str = ""
 
     @property
     def whitelisted(self) -> bool:
         return self.whitelisted_user or self.whitelisted_role
+
+    @property
+    def forced(self) -> bool:
+        """Flagged by a moderator overriding the rules, not by the rules."""
+        flagged = self.state is MemberState.FLAGGED or self.has_inactive_role
+        return flagged and self.forced_at is not None
 
 
 @dataclass(frozen=True, slots=True)

@@ -135,12 +135,23 @@ class ActionExecutor:
 
     # -------------------------------------------------------------------- actions
 
-    async def flag(self, user_id: int, *, reason: str, days_left: int) -> bool:
+    async def flag(
+        self,
+        user_id: int,
+        *,
+        reason: str,
+        days_left: int,
+        forced_baseline: int | None = None,
+    ) -> bool:
         """Assign the inactive role and deliver the first warning.
 
         The warning is part of flagging rather than a separate step, because the
         kick clock starts from delivery -- separating them risks a flagged member
         with no clock and no record of why.
+
+        `forced_baseline` marks a moderator's forced flag: the messages they had
+        already posted today, before it, which must not count toward clearing it.
+        A forced flag also ends any pardon, which would otherwise lift it again.
         """
         if not self._cap_available(Action.FLAG):
             self.report.cap_blocked[Action.FLAG] += 1
@@ -165,6 +176,11 @@ class ActionExecutor:
         if warn.delivery is None:
             self.report.warnings_undelivered += 1
 
+        forced: dict[str, object] = {"forced_at": None}
+        if forced_baseline is not None:
+            forced.update(
+                forced_at=now, forced_baseline=forced_baseline, pardoned_until=None
+            )
         await self.store.update_member(
             self.guild_id,
             user_id,
@@ -175,6 +191,7 @@ class ActionExecutor:
             warning_channel_id=warn.channel_id,
             warning_message_id=warn.message_id,
             final_warned_at=None,
+            **forced,
         )
         # Public announcement, after the role is really on. Deliberately never
         # sent during a dry run: telling members they have been flagged when
@@ -191,6 +208,7 @@ class ActionExecutor:
                 "warn_delivery": warn.delivery,
                 "warn_detail": warn.detail,
                 "announced": announced.ok,
+                "forced": forced_baseline is not None,
             },
         )
         if warn.delivery is None:
@@ -225,6 +243,7 @@ class ActionExecutor:
             warned_at=None,
             warn_delivery=None,
             final_warned_at=None,
+            forced_at=None,
         )
         await self._audit("unflag", user_id, reason)
         await self._throttle()

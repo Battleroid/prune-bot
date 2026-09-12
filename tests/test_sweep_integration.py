@@ -768,11 +768,13 @@ async def test_manual_flag_acts_when_the_sweep_would(env):
     )
 
     assert result.flagged and result.reason == "flagged"
+    assert not result.forced
     assert gw.calls_of("add_role") == [member.user_id]
     assert gw.calls_of("warn:initial") == [member.user_id]
     assert gw.calls_of("announce") == [member.user_id]
     row = await store.get_member(GUILD_ID, member.user_id)
     assert row.state is MemberState.FLAGGED
+    assert row.forced_at is None  # an ordinary flag: any posting can clear it
     history = await store.user_history(GUILD_ID, member.user_id)
     assert any(r["action"] == "flag" and r["actor_id"] == 42 for r in history)
 

@@ -134,23 +134,36 @@ def build_whitelist_pages(entries, guild) -> list[discord.Embed]:
     return embeds
 
 
+#: Appended to the refusals that `force:true` can override.
+FORCE_HINT = " Use `force:true` to flag them anyway."
+
+
 def manual_flag_message(result, member, config) -> str:
     """Explain a /prune flag outcome. A refusal names the exact rule that applied."""
     snap = result.snapshot
     code = result.reason
     if result.flagged:
-        if not result.dm_delivered:
-            return (
-                f"Flagged {member.mention}, but their DMs are closed, so the warning DM "
+        verb = "Force-flagged" if result.forced else "Flagged"
+        if result.dm_delivered:
+            text = f"{verb} {member.mention}: role on, warning sent."
+        else:
+            text = (
+                f"{verb} {member.mention}, but their DMs are closed, so the warning DM "
                 f"did not arrive."
             )
-        return f"Flagged {member.mention}: role on, warning sent."
+        if result.forced:
+            n = config.activity.min_messages
+            text += (
+                f" It lifts once they post {n} message{'s' if n != 1 else ''} from now "
+                f"on; anything they posted before doesn't count."
+            )
+        return text
     if code == "not_in_guild":
         return "That member is not in this server."
     if code == "already_flagged":
         return f"{member.mention} is already flagged."
     if code == "backfill_incomplete":
-        return f"Not flagging anyone yet: {result.detail}."
+        return f"Not flagging anyone yet: {result.detail}.{FORCE_HINT}"
     if code == "dry_run":
         return (
             f"Dry run is on, so nothing changed. With it off, {member.mention} would "
@@ -163,17 +176,18 @@ def manual_flag_message(result, member, config) -> str:
             f"Not flagged: {member.mention} has **{snap.message_count}** messages in the "
             f"last {config.activity.window_days} days (the line is "
             f"{config.activity.min_messages}), so the next sweep would just lift it."
+            f"{FORCE_HINT} Then only what they post from now on can clear it."
         )
     if code == el.R_NEW_MEMBER:
         return (
             f"Not flagged: {member.mention} joined {relative(snap.joined_at)}, and new "
             f"members get {config.flagging.grace_days_after_join} days before they can "
-            f"be flagged."
+            f"be flagged.{FORCE_HINT}"
         )
     if code == el.R_PARDONED:
         return (
             f"Not flagged: {member.mention} is pardoned until "
-            f"{discord.utils.format_dt(snap.pardoned_until, 'D')}."
+            f"{discord.utils.format_dt(snap.pardoned_until, 'D')}.{FORCE_HINT}"
         )
     if code in (el.R_WHITELIST_USER, el.R_WHITELIST_ROLE):
         how = "directly" if code == el.R_WHITELIST_USER else "through a role"
@@ -731,14 +745,19 @@ class PruneGroup(app_commands.Group):
 
     @app_commands.command(
         name="flag",
-        description="Flag a member now, if the rules would flag them at the next sweep.",
+        description="Flag a member now. force:true flags them even if the rules would not.",
     )
-    @app_commands.describe(member="Who to flag", reason="Recorded in the audit log")
+    @app_commands.describe(
+        member="Who to flag",
+        reason="Recorded in the audit log",
+        force="Flag them even if they are posting, pardoned or new. Only posts after it clear it",
+    )
     async def flag_command(
         self,
         interaction: discord.Interaction,
         member: discord.Member,
         reason: str | None = None,
+        force: bool = False,
     ) -> None:
         bot = interaction.client
         await interaction.response.defer(ephemeral=True)
@@ -752,8 +771,9 @@ class PruneGroup(app_commands.Group):
             store=bot.store,
             config=config,
             user_id=member.id,
-            reason=reason or "flagged by a moderator",
+            reason=reason or ("forced by a moderator" if force else "flagged by a moderator"),
             actor_id=interaction.user.id,
+            force=force,
         )
         await interaction.followup.send(
             manual_flag_message(result, member, config), ephemeral=True

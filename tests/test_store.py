@@ -263,3 +263,41 @@ async def test_wiping_then_re_adding_gives_the_same_totals(store):
     await store.clear_guild_activity(GUILD_ID)
     await store.bump_activity(rows)
     assert await store.window_counts(GUILD_ID, 0) == {1: 5}
+
+
+# --------------------------------------------------------------- forced flags
+
+
+async def test_a_version_1_database_gains_the_forced_flag_columns(tmp_path):
+    """The live database predates forced flags; upgrading must keep its rows."""
+    import aiosqlite
+
+    from prunebot.db.migrations import base_schema
+    from prunebot.db.store import Store
+
+    path = tmp_path / "v1.db"
+    async with aiosqlite.connect(path) as db:
+        await db.executescript(base_schema())
+        await db.execute("PRAGMA user_version = 1")
+        await db.execute(
+            "INSERT INTO member_state (guild_id, user_id, state, first_seen_at) "
+            "VALUES (?, 7, 'flagged', 1)",
+            (GUILD_ID,),
+        )
+        await db.commit()
+
+    upgraded = Store(path)
+    assert await upgraded.connect() == (1, SCHEMA_VERSION)
+    try:
+        row = await upgraded.get_member(GUILD_ID, 7)
+        assert row.state is MemberState.FLAGGED
+        assert row.forced_at is None
+        assert row.forced_baseline == 0
+    finally:
+        await upgraded.close()
+
+
+async def test_forced_flag_columns_round_trip(store):
+    await store.update_member(GUILD_ID, 1, forced_at=500, forced_baseline=3)
+    row = await store.get_member(GUILD_ID, 1)
+    assert (row.forced_at, row.forced_baseline) == (500, 3)

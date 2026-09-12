@@ -24,6 +24,7 @@ def build_snapshot(
     row: MemberStateRow | None,
     whitelist_users: frozenset[int] | set[int],
     whitelist_roles: frozenset[int] | set[int],
+    messages_since_forced: int = 0,
 ) -> MemberSnapshot:
     state = row.state if row else MemberState.ACTIVE
     # A member who is present again is not 'left' or 'kicked', whatever the row says.
@@ -51,6 +52,8 @@ def build_snapshot(
         warn_delivery=row.warn_delivery if row else None,
         final_warned_at=from_epoch(row.final_warned_at) if row else None,
         pardoned_until=from_epoch(row.pardoned_until) if row else None,
+        forced_at=from_epoch(row.forced_at) if row else None,
+        messages_since_forced=messages_since_forced,
         display_name=info.display_name,
     )
 
@@ -62,7 +65,9 @@ def build_snapshots(
     rows: Mapping[int, MemberStateRow],
     whitelist_users: frozenset[int] | set[int],
     whitelist_roles: frozenset[int] | set[int],
+    since_forced: Mapping[int, int] | None = None,
 ) -> list[MemberSnapshot]:
+    since_forced = since_forced or {}
     return [
         build_snapshot(
             info,
@@ -70,6 +75,7 @@ def build_snapshots(
             row=rows.get(info.user_id),
             whitelist_users=whitelist_users,
             whitelist_roles=whitelist_roles,
+            messages_since_forced=since_forced.get(info.user_id, 0),
         )
         for info in members
     ]

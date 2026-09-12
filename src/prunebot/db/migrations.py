@@ -10,11 +10,19 @@ from importlib import resources
 
 import aiosqlite
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 # version -> statements taking the database from (version - 1) to version.
 # Version 1 is special: it comes from schema.sql.
-MIGRATIONS: dict[int, list[str]] = {}
+MIGRATIONS: dict[int, list[str]] = {
+    # Forced flags (/prune flag force:true). forced_baseline is how many messages
+    # the member had already posted on the day of the flag: those came before
+    # it, so they must not count toward clearing it.
+    2: [
+        "ALTER TABLE member_state ADD COLUMN forced_at INTEGER",
+        "ALTER TABLE member_state ADD COLUMN forced_baseline INTEGER NOT NULL DEFAULT 0",
+    ],
+}
 
 
 def base_schema() -> str:

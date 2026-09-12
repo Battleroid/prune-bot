@@ -137,6 +137,14 @@ def status_embed(
     if flagged:
         if decision.action is Action.UNFLAG:
             clear = "lifts at the next sweep"
+        elif snapshot.forced:
+            # Only posts since a forced flag count toward clearing it.
+            short = max(0, min_messages - snapshot.messages_since_forced)
+            clear = (
+                f"{short} more message(s) since the forced flag"
+                if short
+                else "only a moderator can lift it"
+            )
         else:
             short = max(0, min_messages - snapshot.message_count)
             clear = (
@@ -157,7 +165,12 @@ def status_embed(
         embed.add_field(name="Flagged in", value=countdown, inline=True)
 
     if snapshot.flagged_at:
-        embed.add_field(name="Flagged", value=relative(snapshot.flagged_at), inline=True)
+        when = relative(snapshot.flagged_at)
+        embed.add_field(
+            name="Flagged",
+            value=f"{when} (forced by a moderator)" if snapshot.forced else when,
+            inline=True,
+        )
     if snapshot.warned_at:
         embed.add_field(name="Warned", value=relative(snapshot.warned_at), inline=True)
     elif snapshot.state.value == "flagged":

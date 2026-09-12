@@ -50,6 +50,8 @@ def _row_to_member(row: aiosqlite.Row) -> MemberStateRow:
         left_at=row["left_at"],
         rejoin_count=row["rejoin_count"],
         flagged_on_leave=bool(row["flagged_on_leave"]),
+        forced_at=row["forced_at"],
+        forced_baseline=row["forced_baseline"],
     )
 
 
@@ -233,6 +235,8 @@ class Store:
             "left_at",
             "rejoin_count",
             "flagged_on_leave",
+            "forced_at",
+            "forced_baseline",
         }
         unknown = set(fields) - allowed
         if unknown:

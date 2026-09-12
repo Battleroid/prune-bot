@@ -75,6 +75,22 @@ def sum_window(buckets: dict[int, int], since_day: int) -> int:
     return sum(count for day, count in buckets.items() if day >= since_day)
 
 
+def messages_since(
+    buckets: dict[int, int], *, since_day: int, baseline: int, window_start: int
+) -> int:
+    """Messages in the window posted on or after `since_day`, leaving out the first
+    `baseline` messages of `since_day` itself -- those came before the event.
+
+    Used for forced flags, where only posting after the flag may clear it.
+    """
+    total = 0
+    for day, count in buckets.items():
+        if day < since_day or day < window_start:
+            continue
+        total += max(0, count - baseline) if day == since_day else count
+    return total
+
+
 def days_until_inactive(
     buckets: dict[int, int], today: int, window_days: int, min_messages: int
 ) -> int:

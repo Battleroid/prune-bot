@@ -76,7 +76,7 @@ class Tracking(commands.Cog):
                 dry_run=config.safety.dry_run,
             )
         else:
-            fields.update(state=MemberState.ACTIVE, flagged_on_leave=False)
+            fields.update(state=MemberState.ACTIVE, flagged_on_leave=False, forced_at=None)
             if config.rejoin.rejoin_grace_days:
                 # A clean returner gets a short breather before being counted again.
                 fields["pardoned_until"] = now + config.rejoin.rejoin_grace_days * 86400
