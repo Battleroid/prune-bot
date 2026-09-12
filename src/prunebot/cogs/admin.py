@@ -20,7 +20,13 @@ from ..config import RUNTIME_SAFE_KEYS, ConfigError, parse_override
 from ..domain.models import Action, MemberState
 from ..domain.windows import window_start_day
 from ..services.backfill import BackfillRunner
-from ..services.sweep import build_sweep_plan, clear_flag, status_for
+from ..services.sweep import (
+    build_sweep_plan,
+    clear_flag,
+    flagged_members,
+    pardon_all,
+    status_for,
+)
 from ..ui.confirm import ConfirmView
 from ..ui.embeds import INFO_COLOUR, OK_COLOUR, plan_embed, relative, status_embed
 from ..ui.paginator import Paginator, chunk_lines
@@ -565,6 +571,82 @@ class PruneGroup(app_commands.Group):
             f"({span} days). For a permanent exemption use `/prune whitelist add`.",
             ephemeral=True,
         )
+
+    # -------------------------------------------------------------- pardon-all
+
+    @app_commands.command(
+        name="pardon-all",
+        description="Pardon everyone currently flagged: remove the role and protect them.",
+    )
+    @app_commands.describe(
+        days="How long the pardon lasts (default: kicking.reverify_grace_days)",
+        reason="Recorded in the audit log",
+    )
+    async def pardon_all_command(
+        self,
+        interaction: discord.Interaction,
+        days: app_commands.Range[int, 1, 3650] | None = None,
+        reason: str | None = None,
+    ) -> None:
+        bot = interaction.client
+        await interaction.response.defer(ephemeral=True)
+        config = await bot.config_for(interaction.guild_id)
+        gateway = await bot.gateway_for(interaction.guild_id)
+        targets, unmanageable = await flagged_members(gateway=gateway, store=bot.store)
+
+        blocked_note = (
+            f"\n{len(unmanageable)} flagged member(s) sit above my role and will be "
+            f"skipped; move my role higher to include them."
+            if unmanageable
+            else ""
+        )
+        if not targets:
+            await interaction.followup.send(
+                "Nobody I can manage is currently flagged." + blocked_note,
+                ephemeral=True,
+            )
+            return
+
+        span = days or config.kicking.reverify_grace_days
+        seconds = len(targets) * config.safety.action_delay_seconds
+        view = ConfirmView(requester_id=interaction.user.id)
+        await interaction.followup.send(
+            content=(
+                f"**Pardon {len(targets)} flagged member(s)?** The inactive role comes "
+                f"off now, and none of them can be flagged again for **{span} days**. "
+                f"This takes about {seconds:.0f}s.{blocked_note}"
+            ),
+            view=view,
+            ephemeral=True,
+        )
+        await view.wait()
+        if not view.value:
+            return
+
+        # Exactly the list that was just confirmed, not a fresh recount.
+        result = await pardon_all(
+            gateway=gateway,
+            store=bot.store,
+            config=config,
+            targets=targets,
+            days=span,
+            reason=reason or "bulk pardon by a moderator",
+            actor_id=interaction.user.id,
+            unmanageable=unmanageable,
+        )
+        until = datetime.fromtimestamp(result.until, tz=discord.utils.utcnow().tzinfo)
+        lines = [
+            f"Pardoned **{len(result.pardoned)}** member(s) until "
+            f"{discord.utils.format_dt(until, 'D')}."
+        ]
+        if result.failed:
+            lines.append(
+                f"{len(result.failed)} could not be pardoned: "
+                + ", ".join(f"<@{uid}>" for uid in result.failed[:20])
+            )
+        if result.unmanageable:
+            lines.append(f"{len(result.unmanageable)} skipped: above my role.")
+        await interaction.followup.send("\n".join(lines), ephemeral=True)
 
     # ------------------------------------------------------------------ backfill
 

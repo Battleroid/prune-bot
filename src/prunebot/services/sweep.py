@@ -361,6 +361,96 @@ async def clear_flag(
     return ok
 
 
+@dataclass
+class PardonAllResult:
+    pardoned: list[int] = field(default_factory=list)
+    failed: list[int] = field(default_factory=list)
+    unmanageable: list[int] = field(default_factory=list)
+    until: int = 0
+
+
+async def flagged_members(
+    *, gateway: GuildGateway, store: Store
+) -> tuple[list[int], list[int]]:
+    """Current members who are flagged, split into (manageable, unmanageable).
+
+    "Flagged" is the union of wearing the inactive role in Discord and being
+    FLAGGED in the database, so drift in either direction is still covered.
+    Members the bot cannot manage come back separately: trying them would only
+    produce 403s.
+    """
+    members = {m.user_id: m for m in await gateway.members()}
+    rows = await store.all_members(gateway.guild_id)
+    flagged = {uid for uid, m in members.items() if m.has_inactive_role}
+    flagged |= {
+        uid
+        for uid, row in rows.items()
+        if row.state is MemberState.FLAGGED and uid in members
+    }
+    manageable = sorted(uid for uid in flagged if members[uid].bot_can_manage)
+    unmanageable = sorted(uid for uid in flagged if not members[uid].bot_can_manage)
+    return manageable, unmanageable
+
+
+async def pardon_all(
+    *,
+    gateway: GuildGateway,
+    store: Store,
+    config: Config,
+    targets: list[int],
+    days: int,
+    reason: str,
+    actor_id: int | None = None,
+    unmanageable: list[int] | None = None,
+    now: datetime | None = None,
+) -> PardonAllResult:
+    """Pardon exactly `targets` -- the list the moderator confirmed, not a fresh
+    recount -- taking the role off and protecting each member for `days`.
+
+    A deliberate moderator action, so like /prune pardon it acts even in dry run.
+    Role changes are throttled like a sweep's, since this can touch many members.
+    """
+    moment = now or datetime.now(tz=UTC)
+    until = int(moment.timestamp()) + days * 86400
+    executor = ActionExecutor(
+        gateway=gateway,
+        store=store,
+        guild_id=gateway.guild_id,
+        sweep_id="pardon-all",
+        dry_run=False,
+        now=moment,
+        action_delay_seconds=config.safety.action_delay_seconds,
+        post_every_action=config.audit.post_every_action,
+        actor_id=actor_id,
+    )
+    result = PardonAllResult(unmanageable=list(unmanageable or []), until=until)
+    for user_id in targets:
+        if await executor.unflag(user_id, reason=reason, new_state=MemberState.PARDONED):
+            await store.update_member(gateway.guild_id, user_id, pardoned_until=until)
+            result.pardoned.append(user_id)
+        else:
+            result.failed.append(user_id)
+
+    await store.add_audit(
+        gateway.guild_id,
+        "pardon_all",
+        reason=reason,
+        actor_id=actor_id,
+        payload={
+            "pardoned": len(result.pardoned),
+            "failed": len(result.failed),
+            "unmanageable": len(result.unmanageable),
+            "days": days,
+        },
+    )
+    who = f"<@{actor_id}>" if actor_id else "a moderator"
+    await gateway.post_audit(
+        f"Bulk pardon by {who}: {len(result.pardoned)} pardoned for {days} days, "
+        f"{len(result.failed)} failed, {len(result.unmanageable)} skipped as unmanageable."
+    )
+    return result
+
+
 async def status_for(
     *,
     gateway: GuildGateway,

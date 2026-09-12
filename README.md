@@ -174,6 +174,7 @@ member-facing command: the one thing a flagged member can do is post.
 | `/prune whitelist remove <target>` / `list` | Manage the whitelist. `list` marks entries whose user or role no longer exists |
 | **Whitelist User** (right-click → Apps) | Same as `whitelist add`, from a member's context menu |
 | `/prune pardon <member> [days] [reason]` | Temporary protection, and unflags. Contrast the whitelist, which is permanent |
+| `/prune pardon-all [days] [reason]` | Pardon **everyone** currently flagged at once, after a confirmation showing how many. Members above the bot's role are skipped and reported |
 | `/prune config show` / `set` / `clear` | Inspect settings; change the runtime-safe subset |
 | `/prune backfill [channel] [force]` | Rescan history to rebuild counts |
 | `/prune stats` | Population, how many are below threshold, backfill status, dry-run state |

@@ -573,3 +573,163 @@ async def test_nothing_is_announced_when_a_member_is_not_flagged(env):
     await run_sweep(gateway=gw, store=store, config=make_config(), now=NOW)
 
     assert gw.calls_of("announce") == []
+
+
+# -------------------------------------------------------------------- pardon-all
+
+
+async def _flag(store, member, *, flagged_days_ago=10):
+    stamp = int(days_ago(flagged_days_ago).timestamp())
+    await store.update_member(
+        GUILD_ID,
+        member.user_id,
+        state=MemberState.FLAGGED,
+        flagged_at=stamp,
+        warned_at=stamp,
+        warn_delivery="dm",
+    )
+
+
+async def test_pardon_all_finds_flagged_members_by_role_or_by_row(env):
+    """Drift in either direction is still covered."""
+    from prunebot.services.sweep import flagged_members
+
+    store = env
+    both = make_info(has_inactive_role=True)
+    role_only = make_info(has_inactive_role=True)  # wearing it, db says active
+    row_only = make_info(has_inactive_role=False)  # db says flagged, role gone
+    clean = make_info()
+    await _flag(store, both)
+    await _flag(store, row_only)
+    gw = FakeGateway([both, role_only, row_only, clean])
+
+    manageable, unmanageable = await flagged_members(gateway=gw, store=store)
+
+    assert set(manageable) == {both.user_id, role_only.user_id, row_only.user_id}
+    assert unmanageable == []
+
+
+async def test_pardon_all_removes_the_role_and_protects_everyone_it_names(env):
+    from prunebot.services.sweep import flagged_members, pardon_all
+
+    store = env
+    flagged = [make_info(has_inactive_role=True) for _ in range(3)]
+    for member in flagged:
+        await _flag(store, member)
+    bystander = make_info()
+    gw = FakeGateway(flagged + [bystander])
+    targets, unmanageable = await flagged_members(gateway=gw, store=store)
+
+    result = await pardon_all(
+        gateway=gw,
+        store=store,
+        config=make_config(),
+        targets=targets,
+        days=30,
+        reason="amnesty",
+        actor_id=42,
+        unmanageable=unmanageable,
+        now=NOW,
+    )
+
+    ids = sorted(m.user_id for m in flagged)
+    assert sorted(result.pardoned) == ids
+    assert sorted(gw.calls_of("remove_role")) == ids
+    for member in flagged:
+        row = await store.get_member(GUILD_ID, member.user_id)
+        assert row.state is MemberState.PARDONED
+        assert row.pardoned_until == int(NOW.timestamp()) + 30 * 86400
+    assert bystander.user_id not in gw.calls_of("remove_role")
+
+
+async def test_pardoned_members_are_not_reflagged_until_the_pardon_ends(env):
+    from prunebot.services.sweep import pardon_all
+
+    store = env
+    member = make_info(has_inactive_role=True)
+    await _flag(store, member)
+    gw = FakeGateway([member])
+    await pardon_all(
+        gateway=gw, store=store, config=make_config(),
+        targets=[member.user_id], days=30, reason="amnesty", now=NOW,
+    )
+    gw.set_members([make_info(user_id=member.user_id, has_inactive_role=False)])
+
+    await run_sweep(gateway=gw, store=store, config=make_config(), now=NOW + timedelta(days=5))
+    assert gw.calls_of("add_role") == []
+
+    await run_sweep(gateway=gw, store=store, config=make_config(), now=NOW + timedelta(days=31))
+    assert gw.calls_of("add_role") == [member.user_id]
+
+
+async def test_pardon_all_executes_exactly_the_confirmed_list(env):
+    """What the moderator confirmed is what runs; someone flagged in between is
+    not swept up by a recount."""
+    from prunebot.services.sweep import pardon_all
+
+    store = env
+    confirmed = make_info(has_inactive_role=True)
+    latecomer = make_info(has_inactive_role=True)
+    await _flag(store, confirmed)
+    await _flag(store, latecomer)
+    gw = FakeGateway([confirmed, latecomer])
+
+    await pardon_all(
+        gateway=gw, store=store, config=make_config(),
+        targets=[confirmed.user_id], days=30, reason="amnesty", now=NOW,
+    )
+
+    assert gw.calls_of("remove_role") == [confirmed.user_id]
+
+
+async def test_unmanageable_flagged_members_are_reported_not_attempted(env):
+    from prunebot.services.sweep import flagged_members
+
+    store = env
+    stuck = make_info(has_inactive_role=True, bot_can_manage=False)
+    fine = make_info(has_inactive_role=True)
+    gw = FakeGateway([stuck, fine])
+
+    manageable, unmanageable = await flagged_members(gateway=gw, store=store)
+
+    assert manageable == [fine.user_id]
+    assert unmanageable == [stuck.user_id]
+
+
+async def test_a_failed_removal_is_reported_and_not_marked_pardoned(env):
+    from prunebot.services.sweep import pardon_all
+
+    store = env
+    member = make_info(has_inactive_role=True)
+    await _flag(store, member)
+    gw = FakeGateway([member])
+    gw.role_forbidden.add(member.user_id)
+
+    result = await pardon_all(
+        gateway=gw, store=store, config=make_config(),
+        targets=[member.user_id], days=30, reason="amnesty", now=NOW,
+    )
+
+    assert result.failed == [member.user_id]
+    assert result.pardoned == []
+    row = await store.get_member(GUILD_ID, member.user_id)
+    assert row.state is MemberState.FLAGGED
+
+
+async def test_pardon_all_leaves_one_bulk_audit_record(env):
+    from prunebot.services.sweep import pardon_all
+
+    store = env
+    member = make_info(has_inactive_role=True)
+    await _flag(store, member)
+    gw = FakeGateway([member])
+
+    await pardon_all(
+        gateway=gw, store=store, config=make_config(),
+        targets=[member.user_id], days=14, reason="amnesty", actor_id=42, now=NOW,
+    )
+
+    rows = await store.recent_audit(GUILD_ID, limit=20)
+    bulk = [r for r in rows if r["action"] == "pardon_all"]
+    assert len(bulk) == 1
+    assert bulk[0]["actor_id"] == 42

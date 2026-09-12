@@ -63,6 +63,7 @@ async def test_command_tree_has_the_expected_shape(bot):
         "preview",
         "run",
         "pardon",
+        "pardon-all",
         "whitelist",
         "config",
         "backfill",
