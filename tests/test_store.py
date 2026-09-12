@@ -243,3 +243,23 @@ async def test_last_active_day_is_the_latest_bucket_with_messages(store):
     )
     assert await store.last_active_day(GUILD_ID, 1) == 140
     assert await store.last_active_day(GUILD_ID, 3) is None
+
+
+
+async def test_clear_guild_activity_wipes_only_that_guild(store):
+    await store.bump_activity(
+        [(GUILD_ID, 1, 100, 3), (GUILD_ID, 2, 101, 1), (999, 1, 100, 5)]
+    )
+    assert await store.clear_guild_activity(GUILD_ID) == 2
+    assert await store.window_counts(GUILD_ID, 0) == {}
+    assert await store.window_counts(999, 0) == {1: 5}
+
+
+async def test_wiping_then_re_adding_gives_the_same_totals(store):
+    """Store half of the forced-rebuild guarantee: wipe + re-add == add once,
+    whereas re-adding without the wipe doubles."""
+    rows = [(GUILD_ID, 1, 100, 3), (GUILD_ID, 1, 101, 2)]
+    await store.bump_activity(rows)
+    await store.clear_guild_activity(GUILD_ID)
+    await store.bump_activity(rows)
+    assert await store.window_counts(GUILD_ID, 0) == {1: 5}

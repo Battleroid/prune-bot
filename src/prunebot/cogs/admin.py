@@ -20,7 +20,13 @@ from ..config import RUNTIME_SAFE_KEYS, ConfigError, parse_override
 from ..domain import eligibility as el
 from ..domain.models import Action, MemberState
 from ..domain.windows import day_of, days_until_inactive, from_epoch, window_start_day
-from ..services.backfill import BackfillRunner
+from ..services.backfill import (
+    FORCE_WITH_CHANNEL,
+    BackfillRunner,
+    NothingScanned,
+    NotReady,
+    prepare_forced_rebuild,
+)
 from ..services.sweep import (
     build_sweep_plan,
     clear_flag,
@@ -759,7 +765,8 @@ class PruneGroup(app_commands.Group):
         name="backfill", description="Rescan channel history to rebuild activity counts."
     )
     @app_commands.describe(
-        channel="Only scan this channel", force="Rescan even if already completed"
+        channel="Only scan this one channel (cannot be combined with force)",
+        force="Rebuild every count from scratch, for the whole server",
     )
     async def backfill(
         self,
@@ -768,28 +775,59 @@ class PruneGroup(app_commands.Group):
         force: bool = False,
     ) -> None:
         bot = interaction.client
+        # Refused before anything is touched: counts are per member per day, not
+        # per channel, so one channel's old counts cannot be removed first.
+        if force and channel is not None:
+            await interaction.response.send_message(FORCE_WITH_CHANNEL, ephemeral=True)
+            return
+
         await interaction.response.defer(ephemeral=True)
         config = await bot.config_for(interaction.guild_id)
-
-        if force:
-            await bot.store.reset_backfill(interaction.guild_id)
-
         runner = BackfillRunner(
             store=bot.store,
             config=config,
             guild=interaction.guild,
             before=discord.utils.utcnow(),
         )
-        await interaction.followup.send(
-            "Scanning history. This can take a while on a busy server; "
-            "I'll report back here when it's done.",
-            ephemeral=True,
-        )
+
+        if force:
+            # Check the scan can run before wiping anything: a wipe followed by a
+            # scan that reads nothing would leave the server with no counts.
+            try:
+                runner.check_ready()
+            except (NotReady, NothingScanned) as exc:
+                await interaction.followup.send(f"Not rebuilding: {exc}.", ephemeral=True)
+                return
+            # Wipe, then rescan up to one cutover: history counts everything before
+            # it and the live listener everything after, each message exactly once.
+            runner.before = await prepare_forced_rebuild(
+                store=bot.store,
+                buffer=bot.activity_buffer,
+                guild_id=interaction.guild_id,
+            )
+            started = (
+                "Rebuilding every activity count from scratch. Flagging and kicking "
+                "are paused until it finishes, which can take a few minutes on a busy "
+                "server; I'll report back here."
+            )
+        else:
+            started = (
+                "Scanning history. This can take a while on a busy server; "
+                "I'll report back here when it's done."
+            )
+        await interaction.followup.send(started, ephemeral=True)
         try:
             await runner.run(channels=[channel] if channel else None)
         except Exception as exc:
             log.exception("manual backfill failed")
-            await interaction.followup.send(f"Backfill failed: `{exc}`", ephemeral=True)
+            paused = (
+                " Flagging and kicking stay paused until a backfill completes."
+                if force
+                else ""
+            )
+            await interaction.followup.send(
+                f"Backfill failed: `{exc}`.{paused}", ephemeral=True
+            )
             return
         await interaction.followup.send(
             embed=discord.Embed(

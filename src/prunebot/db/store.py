@@ -167,6 +167,19 @@ class Store:
         await self.db.commit()
         return cur.rowcount or 0
 
+    async def clear_guild_activity(self, guild_id: int) -> int:
+        """Delete every activity bucket for one guild; returns rows removed.
+
+        Only for a forced rebuild, which immediately rescans the history these
+        counts came from. Used anywhere else it would make the whole server look
+        inactive.
+        """
+        cur = await self.db.execute(
+            "DELETE FROM activity_daily WHERE guild_id = ?", (guild_id,)
+        )
+        await self.db.commit()
+        return cur.rowcount or 0
+
     # --------------------------------------------------------------- member state
 
     async def get_member(self, guild_id: int, user_id: int) -> MemberStateRow | None:

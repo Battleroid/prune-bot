@@ -11,6 +11,7 @@ clean shutdown, which is why docker-compose sets a `stop_grace_period`.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from collections import defaultdict
 
@@ -72,12 +73,35 @@ class ActivityBuffer:
         self.store = store
         self._counts: defaultdict[tuple[int, int, int], int] = defaultdict(int)
         self._last_seen: dict[tuple[int, int], int] = {}
+        #: Per guild: messages created before this moment belong to a forced
+        #: rebuild's history rescan, so the live listener must not count them.
+        self._floor: dict[int, float] = {}
+        #: Held while flushing, and by a forced rebuild while it wipes the counts,
+        #: so a flush already in flight can never land after the wipe.
+        self.lock = asyncio.Lock()
 
-    def record(self, guild_id: int, user_id: int, timestamp: int) -> None:
-        self._counts[(guild_id, user_id, day_of(timestamp))] += 1
+    def record(self, guild_id: int, user_id: int, timestamp: float) -> None:
+        if timestamp < self._floor.get(guild_id, float("-inf")):
+            return  # created before a rebuild's cutover: the rescan counts it
+        seconds = int(timestamp)
+        self._counts[(guild_id, user_id, day_of(seconds))] += 1
         key = (guild_id, user_id)
-        if timestamp > self._last_seen.get(key, 0):
-            self._last_seen[key] = timestamp
+        if seconds > self._last_seen.get(key, 0):
+            self._last_seen[key] = seconds
+
+    def discard_counts(self, guild_id: int) -> int:
+        """Drop one guild's pending counts; returns how many messages were dropped.
+
+        Last-seen times are kept: they are not counts, and nothing else would
+        record them.
+        """
+        dropped = 0
+        for key in [k for k in self._counts if k[0] == guild_id]:
+            dropped += self._counts.pop(key)
+        return dropped
+
+    def set_floor(self, guild_id: int, timestamp: float) -> None:
+        self._floor[guild_id] = timestamp
 
     @property
     def pending(self) -> int:
@@ -86,16 +110,17 @@ class ActivityBuffer:
     async def flush(self) -> int:
         """Write buffered counts. The buffer is swapped out first so that a
         message arriving mid-flush is not lost or double-counted."""
-        if not self._counts and not self._last_seen:
-            return 0
-        counts, self._counts = self._counts, defaultdict(int)
-        last_seen, self._last_seen = self._last_seen, {}
+        async with self.lock:
+            if not self._counts and not self._last_seen:
+                return 0
+            counts, self._counts = self._counts, defaultdict(int)
+            last_seen, self._last_seen = self._last_seen, {}
 
-        rows = [(g, u, day, n) for (g, u, day), n in counts.items()]
-        written = await self.store.bump_activity(rows)
-        await self.store.touch_last_message(
-            [(g, u, ts) for (g, u), ts in last_seen.items()]
-        )
+            rows = [(g, u, day, n) for (g, u, day), n in counts.items()]
+            written = await self.store.bump_activity(rows)
+            await self.store.touch_last_message(
+                [(g, u, ts) for (g, u), ts in last_seen.items()]
+            )
         if written:
             log.debug("flushed %d activity bucket(s)", written)
         return written

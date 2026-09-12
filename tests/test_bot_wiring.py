@@ -143,3 +143,33 @@ async def test_cached_config_falls_back_to_the_base_config(bot):
 async def test_is_managed_only_covers_configured_guilds(bot):
     assert bot.is_managed(GUILD_ID) is True
     assert bot.is_managed(424242) is False
+
+
+
+async def test_backfill_refuses_force_together_with_a_channel(bot, monkeypatch):
+    """One channel's old counts cannot be separated out, so a forced rescan of a
+    single channel would count its messages twice. Refused before touching data."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    from prunebot.services.backfill import FORCE_WITH_CHANNEL
+
+    wipe, reset = AsyncMock(), AsyncMock()
+    monkeypatch.setattr(bot.store, "clear_guild_activity", wipe)
+    monkeypatch.setattr(bot.store, "reset_backfill", reset)
+
+    prune = discord.utils.get(bot.tree.get_commands(), name="prune")
+    backfill = discord.utils.get(prune.commands, name="backfill")
+    interaction = MagicMock()
+    interaction.client = bot
+    interaction.guild_id = GUILD_ID
+    interaction.response.send_message = AsyncMock()
+    interaction.response.defer = AsyncMock()
+
+    await backfill.callback(prune, interaction, channel=MagicMock(), force=True)
+
+    interaction.response.send_message.assert_awaited_once_with(
+        FORCE_WITH_CHANNEL, ephemeral=True
+    )
+    interaction.response.defer.assert_not_awaited()
+    wipe.assert_not_awaited()
+    reset.assert_not_awaited()

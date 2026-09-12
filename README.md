@@ -177,7 +177,7 @@ member-facing command: the one thing a flagged member can do is post.
 | `/prune pardon-all [days] [reason]` | Pardon **everyone** currently flagged at once, after a confirmation showing how many. Members above the bot's role are skipped and reported |
 | `/prune flag <member> [reason]` | Flag someone now instead of waiting for the next sweep, **but only if the sweep would flag them**. Anyone the rules protect (active, whitelisted, pardoned, new, above the bot's role) is refused with the reason. Respects dry run |
 | `/prune config show` / `set` / `clear` | Inspect settings; change the runtime-safe subset |
-| `/prune backfill [channel] [force]` | Rescan history to rebuild counts |
+| `/prune backfill [channel] [force]` | Scan history for channels not yet scanned. `force` rebuilds **every** count from scratch (whole server only, and flagging pauses until it finishes); it cannot be combined with `channel`, since counts are not stored per channel |
 | `/prune stats` | Population, how many are below threshold, backfill status, dry-run state |
 | `/prune history <member>` | Everything the bot has done to one member |
 | `/prune backup` | `VACUUM INTO` a timestamped copy inside the data volume |

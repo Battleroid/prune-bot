@@ -22,7 +22,7 @@ import discord
 from ..config import Config
 from ..db.store import Store
 from ..domain.windows import day_of
-from .activity import COUNTED_TYPES
+from .activity import COUNTED_TYPES, ActivityBuffer
 
 log = logging.getLogger(__name__)
 
@@ -35,6 +35,16 @@ class NotReady(RuntimeError):
 
 class NothingScanned(RuntimeError):
     """No readable channel was found, so any claim of coverage would be a lie."""
+
+
+#: Why `/prune backfill` refuses `force` together with `channel`.
+FORCE_WITH_CHANNEL = (
+    "`force` can't be combined with `channel`. Activity is stored as each member's "
+    "daily total across the whole server, not per channel, so there is no way to "
+    "remove just that channel's old counts first -- rescanning it would add its "
+    "messages a second time. Run `/prune backfill force:true` without a channel to "
+    "rebuild everything."
+)
 
 
 class BackfillRunner:
@@ -81,6 +91,7 @@ class BackfillRunner:
         return channel_id not in set(channels.exclude)
 
     def _target_channels(self) -> list:
+        self.channels_skipped = []  # recomputed on every call
         out = []
         for channel in self.guild.text_channels + list(self.guild.forums):
             if not self._in_scope(channel.id):
@@ -90,6 +101,22 @@ class BackfillRunner:
                 continue
             out.append(channel)
         return out
+
+    def check_ready(self) -> None:
+        """Raise NotReady or NothingScanned if a scan could not run. Reads only
+        the cache, so it is cheap.
+
+        A forced rebuild calls this before wiping the existing counts, so a scan
+        that would read nothing never gets to leave the server with no counts.
+        """
+        if self.guild.me is None:
+            raise NotReady("the bot's own member object is not in the cache yet")
+        if not self._target_channels():
+            raise NothingScanned(
+                f"found no readable channels in {self.guild.name} "
+                f"({len(self.channels_skipped)} skipped for lack of View Channel or "
+                f"Read Message History)"
+            )
 
     async def _threads_of(self, channel) -> list:
         if not (self.config.activity.count_threads or self.config.activity.count_forum_posts):
@@ -265,3 +292,44 @@ class BackfillRunner:
         if self.errors:
             parts.append("errors: " + "; ".join(self.errors[:5]))
         return "\n".join(parts)
+
+
+async def prepare_forced_rebuild(
+    *,
+    store: Store,
+    buffer: ActivityBuffer,
+    guild_id: int,
+    now: datetime | None = None,
+) -> datetime:
+    """Clear the way for a full rescan that rebuilds counts instead of adding to
+    them. Returns the cutover to pass to the rescan as `before`.
+
+    History before the cutover is rescanned; the live listener counts everything
+    after it. So each message is counted exactly once:
+
+    - the guild's stored counts are wiped, because the rescan recounts them;
+    - pending buffered counts are dropped rather than flushed, for the same reason;
+    - the listener ignores messages created before the cutover, which covers one
+      sent a moment before it that only reaches the bot a moment after;
+    - it all happens under the buffer's flush lock, so a periodic flush already in
+      flight cannot write its counts after the wipe.
+
+    Clearing the cursors also clears `backfilled_at`, which closes the backfill
+    gate: sweeps and /prune flag stay paused until the rescan completes, rather
+    than acting on half-rebuilt counts.
+    """
+    async with buffer.lock:
+        cutover = now or discord.utils.utcnow()
+        dropped = buffer.discard_counts(guild_id)
+        buffer.set_floor(guild_id, cutover.timestamp())
+        wiped = await store.clear_guild_activity(guild_id)
+        await store.reset_backfill(guild_id)
+    log.info(
+        "forced rebuild for %s: wiped %d bucket(s), dropped %d buffered message(s), "
+        "cutover %s",
+        guild_id,
+        wiped,
+        dropped,
+        cutover.isoformat(),
+    )
+    return cutover

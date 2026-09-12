@@ -27,7 +27,7 @@ class Tracking(commands.Cog):
             return
         if should_count(message, self.bot.cached_config(guild.id)):
             self.bot.activity_buffer.record(
-                guild.id, message.author.id, int(message.created_at.timestamp())
+                guild.id, message.author.id, message.created_at.timestamp()
             )
 
     # ------------------------------------------------------------------ membership
